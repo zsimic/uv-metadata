@@ -1,2 +1,2 @@
 # uv-metadata
-Python implementation of a `uv metadata` subcommand
+Python proof-of-concept implementation of a `uv metadata` subcommand

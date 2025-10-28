@@ -70,6 +70,15 @@ def get_metadata_dict(path):
 @click.option("--python", "-p", default=CURRENT_PY, help=f"Python interpreter to use (default: {CURRENT_PY})")
 @click.argument("package", default=".")
 def main(python, package):
+    """
+    Output the metadata of a package, in machine-readable format
+
+    \b
+    Examples:
+        uv-metadata requests
+        uv-metadata .
+        uv-metadata git+https://github.com/zsimic/uv-metadata@main
+    """
     # Ensure we don't let our own venv interfere with uv usage
     os.environ.pop("VIRTUAL_ENV", None)
     os.environ["UV_VENV_SEED"] = "0"
