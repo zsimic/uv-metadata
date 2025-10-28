@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uv-metadata"
+version = "0.1.0"
+
+[project.scripts]
+uv-metadata = "uv_metadata:main"
+
+[tool.ruff]
+cache-dir = ".tox/.ruff_cache"
+line-length = 140
+
+[tool.ruff.lint]
+extend-select = [
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "C90", # mccabe
+    "E",   # pycodestyle errors
+    "ERA", # eradicate
+    "EXE", # flake8-executable
+    "F",   # pyflakes
+    "FLY", # flynt
+    "G",   # flake8-logging-format
+    "I",   # isort
+    "INT", # flake8-gettext
+    "PGH", # pygrep-hooks
+    "PIE", # flake8-pie
+    "PT", # flake8-pytest
+    "PYI", # flake8-pyi
+    "Q",   # flake8-quotes
+    "RSE", # flake8-raise
+    "RUF", # ruff-specific
+    "SLOT", # flake8-slots
+    "T10", # flake8-debugger
+    "TID", # flake8-tidy-imports
+    "TCH", # flake8-type-checking
+    "W",   # pycodestyle warnings
+]
+
+[tool.ruff.lint.isort]
+order-by-type = false
+
+[tool.ruff.lint.mccabe]
+max-complexity = 20
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
