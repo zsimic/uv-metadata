@@ -6,7 +6,6 @@ import click
 import runez
 from runez.pyenv import PypiStd
 
-
 CURRENT_PY = f"{sys.version_info[0]}.{sys.version_info[1]}"
 
 
