@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 from email.parser import Parser
@@ -67,9 +68,10 @@ def get_metadata_dict(path):
 
 
 @runez.click.command()
+@runez.click.debug()
 @click.option("--python", "-p", default=CURRENT_PY, help=f"Python interpreter to use (default: {CURRENT_PY})")
 @click.argument("package", default=".")
-def main(python, package):
+def main(debug, python, package):
     """
     Output the metadata of a package, in machine-readable format
 
@@ -85,5 +87,7 @@ def main(python, package):
     if package.startswith((".", "/", "~")):
         package = runez.resolved_path(package)
 
-    metadata = get_metadata(package, python)
-    print(runez.represented_json(metadata))
+    runez.log.setup(debug=debug, console_level=logging.INFO)
+    with runez.log.timeit("Get metadata", logger=logging.info):
+        metadata = get_metadata(package, python)
+        print(runez.represented_json(metadata))
