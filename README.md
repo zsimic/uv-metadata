@@ -63,3 +63,20 @@ Examples:
     "version": "0.1.0"
 }
 ```
+
+
+Relevant PEPs:
+
+- [PEP 508](https://peps.python.org/pep-0508/) – Dependency specification for Python Software Packages
+- [PEP 241](https://peps.python.org/pep-0241/) – Metadata for Python Software Packages
+- [PEP 314](https://peps.python.org/pep-0314/) – Metadata for Python Software Packages 1.1
+- [PEP 345](https://peps.python.org/pep-0345/) – Metadata for Python Software Packages 1.2
+- [PEP 426](https://peps.python.org/pep-0426/) – Metadata for Python Software Packages 2.0
+- [PEP 566](https://peps.python.org/pep-0566/) – Metadata for Python Software Packages 2.1
+- [PEP 643](https://peps.python.org/pep-0643/) – Metadata for Package Source Distributions
+- [PEP 685](https://peps.python.org/pep-0685/) – Comparison of extra names for optional distribution dependencies
+- [PEP 639](https://peps.python.org/pep-0639/) – Improving License Clarity with Better Package Metadata
+
+`pkginfo` has a nice
+[overview](https://github.com/jwilk-mirrors/python-pkginfo/blob/master/pkginfo/distribution.py#L34)
+of what fields were introduced when.
