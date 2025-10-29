@@ -32,7 +32,7 @@ Examples:
 }
 ```
 
-- Info on a git folder:
+- Project from git url:
 
 ```
 ~: uv-metadata git+https://github.com/zsimic/uv-metadata@main
@@ -53,13 +53,13 @@ Examples:
 ```
 
 
-- Info on a local folder
+- Project in a local folder
 
 ```
 ~: uv-metadata .
 {
     ...
-    "name": "...",
-    "version": "..."
+    "name": "my-project",
+    "version": "0.1.0"
 }
 ```
