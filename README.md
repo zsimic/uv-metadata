@@ -16,12 +16,34 @@ Examples:
 ~: uv-metadata requests
 {
     "author": "Kenneth Reitz",
-    ...
+    "author_email": "me@kennethreitz.org",
+    "classifier": [
+        "Development Status :: 5 - Production/Stable",
+        ...
+    ],
+    "description_content_type": "text/markdown",
+    "home_page": "https://requests.readthedocs.io",
+    "license": "Apache-2.0",
+    "license_file": "LICENSE",
+    "metadata_version": "2.4",
     "name": "requests",
+    "project_url": [
+        "Documentation, https://requests.readthedocs.io",
+        "Source, https://github.com/psf/requests"
+    ],
+    "provides_extra": [
+        "security",
+        "socks",
+        "use-chardet-on-py3"
+    ],
     "requires_dist": [
         "charset_normalizer<4,>=2",
         ...
     "requires_python": ">=3.9",
+    "summary": "Python HTTP for Humans.",
+    "top_level": [
+        "requests"
+    ],
     "version": "2.32.5"
 }
 
@@ -80,3 +102,42 @@ Relevant PEPs:
 `pkginfo` has a nice
 [overview](https://github.com/jwilk-mirrors/python-pkginfo/blob/master/pkginfo/distribution.py#L34)
 of what fields were introduced when.
+
+
+# Help synopsis
+
+- `uv metadata --help`
+
+```
+Output metadata info about specified package, in machine readable format
+
+Usage: uv metadata [OPTIONS] [PACKAGE]
+
+Arguments:
+  [PACKAGE]  PEP-508 specification of python package (default: current folder)
+
+Options:
+  -k, --key <KEY>        If specified, show only the value of specified <KEY>
+
+... 8< ... rest of uv's global options
+```
+
+- `uv help metadata`
+
+```
+Output metadata info about specified package, in machine readable format.
+
+By default, show metadata of python project in current working directory.
+
+Usage: uv metadata [OPTIONS] [PACKAGE]
+
+Arguments:
+  [PACKAGE]
+          PEP-508 specification of python package to show metadata for.
+
+Options:
+      -k, --key
+          When specified, show only the value of that key
+
+... 8< ... rest of uv's global options
+```

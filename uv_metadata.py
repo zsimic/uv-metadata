@@ -10,6 +10,13 @@ import tempfile
 from email.parser import Parser
 from pathlib import Path
 
+# See https://github.com/jwilk-mirrors/python-pkginfo/blob/master/pkginfo/distribution.py#L34
+CANONICAL_KEY = {
+    "classifier": "classifiers"  # PEP 301
+}
+# The others seem super-minor, and are not respected even by pypi.org, so ignoring for now
+# Example https://pypi.org/pypi/uv/json
+
 
 def abort_if(condition, msg: str):
     if condition:
@@ -27,8 +34,12 @@ def run_command(exe, *args, fatal=True):
     return result
 
 
-def snakified(name: str) -> str:
-    return re.sub(r"[^\w]", "_", name).lower()
+def canonical_key(key: str) -> str:
+    key = re.sub(r"[^\w]", "_", key).lower()
+    if key in CANONICAL_KEY:
+        return CANONICAL_KEY[key]
+
+    return key
 
 
 def get_metadata_dict(path):
@@ -52,7 +63,7 @@ def get_metadata_dict(path):
                 else:
                     result[key] = [prev, value]
 
-        result = {snakified(k): v for k, v in result.items()}
+        result = {canonical_key(k): v for k, v in result.items()}
 
     return result
 
@@ -76,10 +87,10 @@ def get_metadata(pip_spec: str, python: str) -> dict:
             package_name = package_name.partition("=")[0].strip()
 
         r = run_command("uv", "pip", "show", package_name)
-        show_metadata = Parser().parsestr(r.stdout)
-        version = show_metadata["Version"]
-        wheel_name = snakified(show_metadata["Name"])
-        full_path = Path(show_metadata["Location"]) / f"{wheel_name}-{version}.dist-info"
+        raw_metadata = Parser().parsestr(r.stdout)
+        version = raw_metadata["Version"]
+        wheel_name = re.sub(r"[^\w]", "_", raw_metadata["Name"]).lower()
+        full_path = Path(raw_metadata["Location"]) / f"{wheel_name}-{version}.dist-info"
         metadata = get_metadata_dict(full_path / "METADATA")
         entry_points = full_path / "entry_points.txt"
         if entry_points.exists():
