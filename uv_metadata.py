@@ -9,6 +9,12 @@ import sys
 import tempfile
 from email.parser import Parser
 from pathlib import Path
+from typing import Collection
+
+import pyproject_hooks
+from build.env import IsolatedEnv
+
+from build import ProjectBuilder
 
 # See https://github.com/jwilk-mirrors/python-pkginfo/blob/master/pkginfo/distribution.py#L34
 CANONICAL_KEY = {
@@ -42,6 +48,22 @@ def canonical_key(key: str) -> str:
     return key
 
 
+class UvIsolatedEnv(IsolatedEnv):
+    def __init__(self, venv_folder: Path):
+        self.venv_folder = venv_folder
+
+    @property
+    def python_executable(self) -> str:
+        return str(self.venv_folder / "bin/python")
+
+    def make_extra_environ(self) -> dict:
+        return {}
+
+    def install(self, requirements: Collection[str]) -> None:
+        if requirements:
+            run_command("uv", "pip", "install", "--python", self.python_executable, *requirements)
+
+
 def get_metadata_dict(path):
     result = {}
     if path.exists():
@@ -68,6 +90,24 @@ def get_metadata_dict(path):
     return result
 
 
+def parse_dist_info(full_path: Path) -> dict:
+    metadata = get_metadata_dict(full_path / "METADATA")
+    entry_points = full_path / "entry_points.txt"
+    if entry_points.exists():
+        config = configparser.ConfigParser()
+        config.read(entry_points)
+        eps = {section: dict(config.items(section)) for section in config.sections()}
+        if eps:
+            metadata["entry_points"] = eps
+
+    top_level = full_path / "top_level.txt"
+    if top_level.exists():
+        with open(top_level, "r") as fh:
+            metadata["top_level"] = fh.read().splitlines()
+
+    return metadata
+
+
 def get_metadata(pip_spec: str, python: str) -> dict:
     os.environ["UV_VENV_SEED"] = "0"
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -75,6 +115,17 @@ def get_metadata(pip_spec: str, python: str) -> dict:
         venv_folder = tmpdir / ".venv"
         os.environ["VIRTUAL_ENV"] = str(venv_folder)
         run_command("uv", "venv", f"-p{python}", venv_folder)
+        if isinstance(pip_spec, Path):
+            meta_dir = venv_folder / "dist-info"
+            meta_dir.mkdir(parents=True, exist_ok=True)
+            env = UvIsolatedEnv(venv_folder)
+            builder = ProjectBuilder.from_isolated_env(env, pip_spec, runner=pyproject_hooks.quiet_subprocess_runner)
+            env.install(builder.build_system_requires)
+            env.install(builder.get_requires_for_build("wheel"))
+            meta_path = builder.metadata_path(output_directory=meta_dir)
+            abort_if(not meta_path, "Failed to build metadata")
+            return parse_dist_info(Path(meta_path))
+
         run_command("uv", "pip", "install", "--no-deps", pip_spec)
         r = run_command("uv", "pip", "freeze")
         frozen = r.stdout.splitlines()
@@ -91,21 +142,7 @@ def get_metadata(pip_spec: str, python: str) -> dict:
         version = raw_metadata["Version"]
         wheel_name = re.sub(r"[^\w]", "_", raw_metadata["Name"]).lower()
         full_path = Path(raw_metadata["Location"]) / f"{wheel_name}-{version}.dist-info"
-        metadata = get_metadata_dict(full_path / "METADATA")
-        entry_points = full_path / "entry_points.txt"
-        if entry_points.exists():
-            config = configparser.ConfigParser()
-            config.read(entry_points)
-            eps = {section: dict(config.items(section)) for section in config.sections()}
-            if eps:
-                metadata["entry_points"] = eps
-
-        top_level = full_path / "top_level.txt"
-        if top_level.exists():
-            with open(top_level, "r") as fh:
-                metadata["top_level"] = fh.read().splitlines()
-
-        return metadata
+        return parse_dist_info(full_path)
 
 
 def main(args=None):
