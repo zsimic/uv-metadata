@@ -5,6 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "uv-metadata"
 version = "0.1.0"
+dependencies = [
+  "build>=1.4.0",
+  "pyproject_hooks" # dependency of build but imported so stated here
+]
 
 [project.scripts]
 uv-metadata = "uv_metadata:main"
