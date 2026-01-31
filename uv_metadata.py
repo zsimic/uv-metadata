@@ -12,9 +12,8 @@ from pathlib import Path
 from typing import Collection
 
 import pyproject_hooks
-from build.env import IsolatedEnv
-
 from build import ProjectBuilder
+from build.env import IsolatedEnv
 
 # See https://github.com/jwilk-mirrors/python-pkginfo/blob/master/pkginfo/distribution.py#L34
 CANONICAL_KEY = {
