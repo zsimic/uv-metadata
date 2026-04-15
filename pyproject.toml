@@ -54,3 +54,6 @@ max-complexity = 20
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
+
+[tool.pyright]
+include = ["uv_metadata.py", "tests"]

@@ -9,6 +9,7 @@ import tarfile
 import tempfile
 from importlib.metadata import PathDistribution
 from pathlib import Path
+from typing import NoReturn
 from zipfile import ZipFile
 
 import pyproject_hooks
@@ -16,30 +17,17 @@ from build import BuildBackendException, ProjectBuilder
 from build.env import IsolatedEnv
 from seekablehttpfile import SeekableHttpFile
 
-CANONICAL_KEY = {
-    "classifier": "classifiers",  # PEP 301
-}
 METADATA_FILES = ("METADATA", "PKG-INFO", "entry_points.txt", "top_level.txt")
 UV_PATH = shutil.which("uv")
 
 
-def canonical_key(key: str) -> str:
-    # See https://github.com/jwilk-mirrors/python-pkginfo/blob/master/pkginfo/distribution.py#L34
-    key = re.sub(r"\W", "_", key).lower()
-    return CANONICAL_KEY.get(key, key)
-
-
-def abort(msg: str = ""):
+def abort(msg: str = "") -> NoReturn:
     sys.exit(msg)
 
 
 def abort_if(condition, msg: str = ""):
     if condition:
         sys.exit(msg)
-
-
-def is_meaningful_metadata_value(value) -> bool:
-    return bool(value) and value != "UNKNOWN"
 
 
 def run_uv(*args, fatal=True, env=None, input=None):
@@ -115,22 +103,7 @@ def extract_metadata_from_dist_info(folder: Path) -> dict:
     if not dist.metadata:
         abort(f"no metadata files in {folder.name}")
 
-    result: dict = {}
-    for key, value in dist.metadata.items():
-        if not is_meaningful_metadata_value(value):
-            continue
-
-        normalized = canonical_key(key)
-        prev = result.get(normalized)
-        if prev is None:
-            result[normalized] = value
-
-        elif isinstance(prev, list):
-            prev.append(value)
-
-        else:
-            result[normalized] = [prev, value]
-
+    result: dict = dict(dist.metadata.json)
     eps = dist.entry_points
     if eps:
         grouped: dict = {}
@@ -232,17 +205,19 @@ def extract_metadata_from_uv_resolve(pip_spec: str, python: str | None = None) -
     r = run_uv(*args, "-", input=pip_spec, fatal=False)
     if r.returncode:
         msg = r.stderr.strip()
-        if "not found in the package registry" in r.stderr or "no candidates" in r.stderr.lower():
-            msg = f"Package {pip_spec!r} does not exist"
+        if "not found in the package registry" in msg:
+            msg = f"Package '{pip_spec!r}' does not exist"
 
         abort(msg)
 
     m = re.search(r'\burl\s*=\s*"([^"]+\.whl)"', r.stdout)
-    abort_if(not m, f"no wheel available for {pip_spec!r}")
+    if not m:
+        abort(f"no wheel available for {pip_spec!r}")
+
     wheel_url = m.group(1)
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
-            streamed = ZipFile(SeekableHttpFile(wheel_url, check_etag=False))
+            streamed = ZipFile(SeekableHttpFile(wheel_url, check_etag=False))  # type: ignore[arg-type]
 
         except Exception as e:
             abort(f"can't stream wheel for {pip_spec!r}: {e}")
@@ -365,9 +340,8 @@ def main(args=None):
         print(json.dumps(meta_dict, indent=4, sort_keys=True))
 
     else:
-        key = canonical_key(args.key)
-        value = meta_dict.get(key)
-        abort_if(value is None, f"no key '{key}' in metadata")
+        value = meta_dict.get(args.key)
+        abort_if(value is None, f"no key '{args.key}' in metadata")
         print(value if isinstance(value, str) else json.dumps(value, indent=4, sort_keys=True))
 
 
