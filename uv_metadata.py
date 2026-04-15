@@ -1,43 +1,51 @@
 import argparse
-import configparser
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
-from email.parser import Parser
+from importlib.metadata import PathDistribution
 from pathlib import Path
-from typing import Collection
+from zipfile import ZipFile
 
 import pyproject_hooks
-from build import ProjectBuilder
+from build import BuildBackendException, ProjectBuilder
 from build.env import IsolatedEnv
+from seekablehttpfile import SeekableHttpFile
 
 CANONICAL_KEY = {
     "classifier": "classifiers",  # PEP 301
 }
+METADATA_FILES = ("METADATA", "PKG-INFO", "entry_points.txt", "top_level.txt")
 UV_PATH = shutil.which("uv")
 
 
-def canonical_key(key: str, replace_with="_") -> str:
+def canonical_key(key: str) -> str:
     # See https://github.com/jwilk-mirrors/python-pkginfo/blob/master/pkginfo/distribution.py#L34
-    # The others seem super-minor, and are not respected even by pypi.org, so ignoring for now
-    # Example https://pypi.org/pypi/uv/json
-    key = re.sub(r"\W", replace_with, key).lower()
+    key = re.sub(r"\W", "_", key).lower()
     return CANONICAL_KEY.get(key, key)
 
 
-def abort_if(condition, msg: str):
+def abort(msg: str = ""):
+    sys.exit(msg)
+
+
+def abort_if(condition, msg: str = ""):
     if condition:
         sys.exit(msg)
 
 
-def run_uv(*args, fatal=True):
+def is_meaningful_metadata_value(value) -> bool:
+    return bool(value) and value != "UNKNOWN"
+
+
+def run_uv(*args, fatal=True, env=None, input=None):
     assert UV_PATH is not None
     full_cmd = [UV_PATH, *args]
-    result = subprocess.run(full_cmd, capture_output=True, text=True, check=False)
+    result = subprocess.run(full_cmd, input=input, capture_output=True, check=False, env=env, text=True)
     if result.returncode:
         args = " ".join(x for x in args)
         abort_if(fatal, f"'uv {args}' failed with exit code {result.returncode}:\n{result.stderr}")
@@ -45,7 +53,261 @@ def run_uv(*args, fatal=True):
     return result
 
 
-class UvIsolatedEnv(IsolatedEnv):
+# ---------------------------------------------------------------------------
+# Routing
+# ---------------------------------------------------------------------------
+
+
+def get_metadata(pip_spec: str | None, python: str | None = None) -> dict:
+    """
+    Get metadata for a package, routing to the best extraction strategy:
+
+    - local folder (contains pyproject.toml or setup.py) → build metadata via ProjectBuilder
+    - local *.dist-info or *.egg-info folder → read directly
+    - local .whl or .tar.gz file → extract from archive
+    - git URL or direct reference → install to temp dir, read dist-info
+    - plain package name (optionally version-constrained) → resolve via uv without installing,
+      then stream only the metadata from the remote wheel (much faster than a full install)
+
+    Examples::
+
+        get_metadata(".")
+        get_metadata("requests")
+        get_metadata("requests>=2.28")
+        get_metadata("./dist/mypackage-1.0.0.whl")
+        get_metadata("git+https://github.com/user/repo@main")
+    """
+    if not pip_spec:
+        pip_spec = str(Path(".").absolute())
+
+    # Path-like: starts with common path prefixes or is an existing file/dir
+    if pip_spec.startswith(("~", ".", "/")) or os.path.exists(pip_spec):
+        path = Path(pip_spec).expanduser().resolve()
+        if not path.is_dir():
+            abort_if(not path.name.lower().endswith((".whl", ".tar.gz")), f"Unknown package type '{path.name}'")
+            return extract_metadata_from_file(path)
+
+        if path.name.lower().endswith("-info"):
+            return extract_metadata_from_dist_info(path)
+
+        return extract_metadata_from_project_folder(path, python)
+
+    # Git SSH shorthand: git@github.com:user/repo  or direct reference: pkg @ url
+    if "://" in pip_spec or pip_spec.startswith("git@") or (" @ " in pip_spec):
+        if pip_spec.startswith("git@"):
+            # Autocorrect default git SSH URLs (allows copy-pasting from github.com)
+            pip_spec = "git+ssh://" + pip_spec.replace(":", "/", 1)
+
+        return extract_metadata_from_uv_install(pip_spec, python)
+
+    # Plain package name (optionally version-constrained): use fast resolve path
+    return extract_metadata_from_uv_resolve(pip_spec, python)
+
+
+# ---------------------------------------------------------------------------
+# Extraction functions
+# ---------------------------------------------------------------------------
+
+
+def extract_metadata_from_dist_info(folder: Path) -> dict:
+    """Convert a .(egg|dist)-info directory to a clean metadata dict via importlib.metadata"""
+    dist = PathDistribution(folder)
+    if not dist.metadata:
+        abort(f"no metadata files in {folder.name}")
+
+    result: dict = {}
+    for key, value in dist.metadata.items():
+        if not is_meaningful_metadata_value(value):
+            continue
+
+        normalized = canonical_key(key)
+        prev = result.get(normalized)
+        if prev is None:
+            result[normalized] = value
+
+        elif isinstance(prev, list):
+            prev.append(value)
+
+        else:
+            result[normalized] = [prev, value]
+
+    eps = dist.entry_points
+    if eps:
+        grouped: dict = {}
+        for ep in eps:
+            grouped.setdefault(ep.group, {})[ep.name] = ep.value
+
+        result["entry_points"] = grouped
+
+    top_level = dist.read_text("top_level.txt")
+    if top_level:
+        result["top_level"] = top_level.strip().splitlines()
+
+    return result
+
+
+def extract_metadata_from_project_folder(project_folder: Path, python: str | None = None) -> dict:
+    """Build package metadata from a source tree using PEP 517 (via the 'build' library)"""
+    abort_if(not project_folder.is_dir(), "folder does not exist")
+    abort_if(
+        not (project_folder / "pyproject.toml").exists() and not (project_folder / "setup.py").exists(),
+        "no pyproject.toml or setup.py",
+    )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        venv_folder = tmpdir_path / ".venv"
+        env = dict(os.environ)
+        env["UV_VENV_SEED"] = "0"
+        env["VIRTUAL_ENV"] = str(venv_folder)
+        venv_args = ["venv"]
+        if python:
+            venv_args.append(f"-p{python}")
+
+        run_uv(*venv_args, str(venv_folder), env=env)
+        isolated_env = _UvIsolatedEnv(venv_folder)
+        try:
+            builder = ProjectBuilder.from_isolated_env(isolated_env, project_folder, runner=pyproject_hooks.quiet_subprocess_runner)
+            isolated_env.install(builder.build_system_requires)
+            isolated_env.install(builder.get_requires_for_build("wheel"))
+            meta_path = builder.metadata_path(tmpdir_path)
+            return extract_metadata_from_dist_info(Path(meta_path))
+
+        except BuildBackendException as e:
+            abort(_build_backend_problem(e) or str(e))
+
+
+def extract_metadata_from_file(path: Path) -> dict:
+    """Extract metadata from a local .whl or .tar.gz file"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        if path.name.lower().endswith(".whl"):
+            with ZipFile(path) as zf:
+                return _extract_from_zipfile(zf, tmpdir_path)
+
+        return _extract_from_tarball(path, tmpdir_path)
+
+
+def extract_metadata_from_uv_install(pip_spec: str, python: str | None = None) -> dict:
+    """Install package to a temp dir and read the resulting dist-info (used for git/URL specs)"""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        target = Path(tmpdir) / "target"
+        args = ["-q", "pip", "install", "--no-deps", "--target", str(target)]
+        if python:
+            args.append(f"-p{python}")
+        args.append(pip_spec)
+        run_uv(*args)
+        info = list(target.glob("*.dist-info"))
+        abort_if(len(info) != 1, f"expected 1 dist-info folder, got: {[p.name for p in info]}")
+        return extract_metadata_from_dist_info(info[0])
+
+
+def extract_metadata_from_uv_resolve(pip_spec: str, python: str | None = None) -> dict:
+    """
+    Resolve package metadata without installing — much faster than a full install.
+
+    Uses 'uv pip compile --format pylock.toml' to find the wheel URL, then streams
+    only the metadata section from the remote .whl via HTTP range requests.
+    Aborts if the package has no wheel (sdist-only packages are not supported here).
+    """
+    args = [
+        "-q",
+        "pip",
+        "compile",
+        "--no-deps",
+        "--no-header",
+        "--universal",
+        "--no-sources",
+        "--format",
+        "pylock.toml",
+        "--fork-strategy",
+        "fewest",
+        "--resolution",
+        "highest",
+        # Use python-version '99' to get latest metadata regardless of local python.
+        # When the caller specifies a python version, honor it so metadata reflects that target.
+        "--python-version",
+        python or "99",
+    ]
+    r = run_uv(*args, "-", input=pip_spec, fatal=False)
+    if r.returncode:
+        msg = r.stderr.strip()
+        if "not found in the package registry" in r.stderr or "no candidates" in r.stderr.lower():
+            msg = f"Package {pip_spec!r} does not exist"
+
+        abort(msg)
+
+    m = re.search(r'\burl\s*=\s*"([^"]+\.whl)"', r.stdout)
+    abort_if(not m, f"no wheel available for {pip_spec!r}")
+    wheel_url = m.group(1)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
+            streamed = ZipFile(SeekableHttpFile(wheel_url, check_etag=False))
+
+        except Exception as e:
+            abort(f"can't stream wheel for {pip_spec!r}: {e}")
+
+        return _extract_from_zipfile(streamed, Path(tmpdir))
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _extract_dist_info_files(info_dir: Path, prefix: str, names: set[str], read_fn) -> None:
+    """Copy dist-info metadata files from an archive into info_dir"""
+    info_dir.mkdir(parents=True, exist_ok=True)
+    for filename in METADATA_FILES:
+        src = f"{prefix}/{filename}"
+        if src in names:
+            dest = "METADATA" if filename == "PKG-INFO" else filename
+            (info_dir / dest).write_bytes(read_fn(src))
+
+
+def _extract_from_zipfile(zf: ZipFile, tmpdir: Path) -> dict:
+    """Extract metadata from an open ZipFile (local wheel or streamed remote wheel)"""
+    names = set(zf.namelist())
+    for name in zf.namelist():
+        m = re.match(r"^([^/]+\.dist-info)/(?:METADATA|PKG-INFO)$", name)
+        if m:
+            info_dir = tmpdir / m.group(1)
+            _extract_dist_info_files(info_dir, m.group(1), names, zf.read)
+            return extract_metadata_from_dist_info(info_dir)
+
+    abort("no dist-info found in wheel")
+
+
+def _extract_from_tarball(path: Path, tmpdir: Path) -> dict:
+    """Extract metadata from an sdist .tar.gz"""
+    with tarfile.open(path) as tf:
+        members = {m.name: m for m in tf.getmembers() if m.isfile()}
+        names = set(members.keys())
+
+        def read_fn(src: str) -> bytes:
+            f = tf.extractfile(members[src])
+            return f.read() if f else b""
+
+        for name in members:
+            m = re.search(r"^(.+\.(dist|egg)-info)/(?:METADATA|PKG-INFO)$", name)
+            if m:
+                prefix = m.group(1)
+                info_dir = tmpdir / Path(prefix).name
+                _extract_dist_info_files(info_dir, prefix, names, read_fn)
+                return extract_metadata_from_dist_info(info_dir)
+
+        # Fallback: root-level PKG-INFO (some older sdists)
+        for name in members:
+            m = re.match(r"^([^/]+)/PKG-INFO$", name)
+            if m:
+                fake_info = tmpdir / "package.dist-info"
+                _extract_dist_info_files(fake_info, m.group(1), names, read_fn)
+                return extract_metadata_from_dist_info(fake_info)
+
+    abort(f"no metadata found in {path.name}")
+
+
+class _UvIsolatedEnv(IsolatedEnv):
     def __init__(self, venv_folder: Path):
         self.venv_folder = venv_folder
 
@@ -56,86 +318,28 @@ class UvIsolatedEnv(IsolatedEnv):
     def make_extra_environ(self) -> dict:
         return {}
 
-    def install(self, requirements: Collection[str]) -> None:
+    def install(self, requirements) -> None:
         if requirements:
             run_uv("pip", "install", "--python", self.python_executable, *requirements)
 
 
-def get_metadata_dict(path):
-    result = {}
-    if path.exists():
-        parser = Parser()
-        with open(path, "r") as fh:
-            raw = parser.parse(fh, headersonly=False)
-            for key, value in raw.items():
-                if key == "Dynamic":
-                    continue
+def _build_backend_problem(exception) -> str | None:
+    actual = getattr(exception, "exception", exception)
+    output = getattr(actual, "output", None)
+    if isinstance(output, bytes):
+        output = output.decode("utf-8", errors="ignore")
 
-                if key not in result:
-                    result[key] = value
-                    continue
-
-                prev = result.get(key)
-                if isinstance(prev, list):
-                    prev.append(value)
-
-                else:
-                    result[key] = [prev, value]
-
-        result = {canonical_key(k): v for k, v in result.items()}
-
-    return result
+    if output:
+        for line in reversed(output.splitlines()):
+            if line.startswith("AssertionError:"):
+                return "invalid metadata"
+            if re.match(r"^([A-Z][a-z]*)+: (.*)$", line):
+                return line
 
 
-def parse_dist_info(full_path: Path) -> dict:
-    metadata = get_metadata_dict(full_path / "METADATA")
-    entry_points = full_path / "entry_points.txt"
-    if entry_points.exists():
-        config = configparser.ConfigParser()
-        config.read(entry_points)
-        eps = {section: dict(config.items(section)) for section in config.sections()}
-        if eps:
-            metadata["entry_points"] = eps
-
-    top_level = full_path / "top_level.txt"
-    if top_level.exists():
-        with open(top_level, "r") as fh:
-            metadata["top_level"] = fh.read().splitlines()
-
-    return metadata
-
-
-def get_metadata(pip_spec: str, python: str) -> dict:
-    os.environ["UV_VENV_SEED"] = "0"
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmpdir = Path(tmpdir)
-        venv_folder = tmpdir / ".venv"
-        os.environ["VIRTUAL_ENV"] = str(venv_folder)
-        run_uv("venv", f"-p{python}", str(venv_folder))
-        if os.path.isdir(pip_spec):
-            meta_dir = venv_folder / "dist-info"
-            meta_dir.mkdir(parents=True, exist_ok=True)
-            env = UvIsolatedEnv(venv_folder)
-            builder = ProjectBuilder.from_isolated_env(env, pip_spec, runner=pyproject_hooks.quiet_subprocess_runner)
-            env.install(builder.build_system_requires)
-            env.install(builder.get_requires_for_build("wheel"))
-            meta_path = builder.metadata_path(output_directory=meta_dir)
-            abort_if(not meta_path, "Failed to build metadata")
-            return parse_dist_info(Path(meta_path))
-
-        run_uv("pip", "install", "--no-deps", pip_spec)
-        r = run_uv("pip", "freeze")
-        frozen = r.stdout.splitlines()
-        abort_if(len(frozen) != 1, f"Unexpected pip freeze output:\n{r.stdout}")
-        package_name = frozen[0]
-        pivot = "@" if "@" in package_name else "="
-        package_name = package_name.partition(pivot)[0].strip()
-        r = run_uv("pip", "show", package_name)
-        raw_metadata = Parser().parsestr(r.stdout)
-        version = raw_metadata["Version"]
-        wheel_name = re.sub(r"[^\w]", "_", raw_metadata["Name"]).lower()
-        full_path = Path(raw_metadata["Location"]) / f"{wheel_name}-{version}.dist-info"
-        return parse_dist_info(full_path)
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 
 def main(args=None):
@@ -144,31 +348,27 @@ def main(args=None):
 
     Examples:
         uv-metadata requests
+        uv-metadata "requests>=2.28"
         uv-metadata .
+        uv-metadata ./dist/mypackage-1.0.0.whl
+        uv-metadata ./dist/mypackage-1.0.0.tar.gz
         uv-metadata git+https://github.com/zsimic/uv-metadata@main
     """
     parser = argparse.ArgumentParser(description=main.__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    syspy = f"{sys.version_info[0]}.{sys.version_info[1]}"
-    parser.add_argument("-p", "--python", default=syspy, help="Python interpreter to use (default: %(default)s)")
+    parser.add_argument("-p", "--python", help="Python version to target (e.g. 3.11)")
     parser.add_argument("-k", "--key", help="Show only this key from the metadata")
-    parser.add_argument("package", default=".", nargs="?", help="Show metadata for specified package")
+    parser.add_argument("package", default=None, nargs="?", help="Package to inspect (default: current folder)")
     args = parser.parse_args(args=args)
 
-    key = args.key
-    package = args.package
-    python = args.python
-    if package.startswith((".", "/", "~")):
-        package = str(Path(package).expanduser().absolute())
-
-    metadata = get_metadata(package, python)
-    if key:
-        abort_if(key not in metadata, f"'{key}' not found in metadata")
-        text = metadata[key]
+    meta_dict = get_metadata(args.package, args.python)
+    if args.key is None:
+        print(json.dumps(meta_dict, indent=4, sort_keys=True))
 
     else:
-        text = json.dumps(metadata, indent=4, sort_keys=True)
-
-    print(text)
+        key = canonical_key(args.key)
+        value = meta_dict.get(key)
+        abort_if(value is None, f"no key '{key}' in metadata")
+        print(value if isinstance(value, str) else json.dumps(value, indent=4, sort_keys=True))
 
 
 if __name__ == "__main__":  # pragma: no cover
