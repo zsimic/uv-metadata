@@ -9,6 +9,10 @@ def test_folder(cli):
     assert payload["name"] == "uv-metadata"
     assert payload["top_level"] == ["uv_metadata"]
 
+    cli.run(cli.tests_folder)
+    assert cli.failed
+    assert "no pyproject.toml or setup.py"
+
 
 def test_package(cli):
     cli.run("pip")
@@ -17,6 +21,10 @@ def test_package(cli):
     assert "pip" in payload["entry_points"]["console_scripts"]
     assert payload["name"] == "pip"
     assert payload["version"]
+
+    cli.run("coverage", "-khome_page")
+    assert cli.succeeded
+    assert cli.logged.stdout.contents().strip() == "https://github.com/coveragepy/coveragepy"
 
 
 def test_single_key(cli):
