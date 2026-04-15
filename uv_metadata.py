@@ -15,12 +15,18 @@ import pyproject_hooks
 from build import ProjectBuilder
 from build.env import IsolatedEnv
 
-# See https://github.com/jwilk-mirrors/python-pkginfo/blob/master/pkginfo/distribution.py#L34
 CANONICAL_KEY = {
-    "classifier": "classifiers"  # PEP 301
+    "classifier": "classifiers",  # PEP 301
 }
-# The others seem super-minor, and are not respected even by pypi.org, so ignoring for now
-# Example https://pypi.org/pypi/uv/json
+UV_PATH = shutil.which("uv")
+
+
+def canonical_key(key: str, replace_with="_") -> str:
+    # See https://github.com/jwilk-mirrors/python-pkginfo/blob/master/pkginfo/distribution.py#L34
+    # The others seem super-minor, and are not respected even by pypi.org, so ignoring for now
+    # Example https://pypi.org/pypi/uv/json
+    key = re.sub(r"\W", replace_with, key).lower()
+    return CANONICAL_KEY.get(key, key)
 
 
 def abort_if(condition, msg: str):
@@ -28,23 +34,15 @@ def abort_if(condition, msg: str):
         sys.exit(msg)
 
 
-def run_command(exe, *args, fatal=True):
-    exe = shutil.which(exe)
-    full_cmd = [exe, *args]
+def run_uv(*args, fatal=True):
+    assert UV_PATH is not None
+    full_cmd = [UV_PATH, *args]
     result = subprocess.run(full_cmd, capture_output=True, text=True, check=False)
     if result.returncode:
-        description = "%s %s" % (exe, " ".join(str(x) for x in args))
-        abort_if(fatal, f"'{description}' failed with exit code {result.returncode}:\n{result.stderr}")
+        args = " ".join(x for x in args)
+        abort_if(fatal, f"'uv {args}' failed with exit code {result.returncode}:\n{result.stderr}")
 
     return result
-
-
-def canonical_key(key: str) -> str:
-    key = re.sub(r"[^\w]", "_", key).lower()
-    if key in CANONICAL_KEY:
-        return CANONICAL_KEY[key]
-
-    return key
 
 
 class UvIsolatedEnv(IsolatedEnv):
@@ -60,7 +58,7 @@ class UvIsolatedEnv(IsolatedEnv):
 
     def install(self, requirements: Collection[str]) -> None:
         if requirements:
-            run_command("uv", "pip", "install", "--python", self.python_executable, *requirements)
+            run_uv("pip", "install", "--python", self.python_executable, *requirements)
 
 
 def get_metadata_dict(path):
@@ -113,8 +111,8 @@ def get_metadata(pip_spec: str, python: str) -> dict:
         tmpdir = Path(tmpdir)
         venv_folder = tmpdir / ".venv"
         os.environ["VIRTUAL_ENV"] = str(venv_folder)
-        run_command("uv", "venv", f"-p{python}", venv_folder)
-        if isinstance(pip_spec, Path):
+        run_uv("venv", f"-p{python}", str(venv_folder))
+        if os.path.isdir(pip_spec):
             meta_dir = venv_folder / "dist-info"
             meta_dir.mkdir(parents=True, exist_ok=True)
             env = UvIsolatedEnv(venv_folder)
@@ -125,18 +123,14 @@ def get_metadata(pip_spec: str, python: str) -> dict:
             abort_if(not meta_path, "Failed to build metadata")
             return parse_dist_info(Path(meta_path))
 
-        run_command("uv", "pip", "install", "--no-deps", pip_spec)
-        r = run_command("uv", "pip", "freeze")
+        run_uv("pip", "install", "--no-deps", pip_spec)
+        r = run_uv("pip", "freeze")
         frozen = r.stdout.splitlines()
         abort_if(len(frozen) != 1, f"Unexpected pip freeze output:\n{r.stdout}")
         package_name = frozen[0]
-        if "@" in package_name:
-            package_name = package_name.partition("@")[0].strip()
-
-        else:
-            package_name = package_name.partition("=")[0].strip()
-
-        r = run_command("uv", "pip", "show", package_name)
+        pivot = "@" if "@" in package_name else "="
+        package_name = package_name.partition(pivot)[0].strip()
+        r = run_uv("pip", "show", package_name)
         raw_metadata = Parser().parsestr(r.stdout)
         version = raw_metadata["Version"]
         wheel_name = re.sub(r"[^\w]", "_", raw_metadata["Name"]).lower()
@@ -164,7 +158,7 @@ def main(args=None):
     package = args.package
     python = args.python
     if package.startswith((".", "/", "~")):
-        package = (Path(package).expanduser()).absolute()
+        package = str(Path(package).expanduser().absolute())
 
     metadata = get_metadata(package, python)
     if key:

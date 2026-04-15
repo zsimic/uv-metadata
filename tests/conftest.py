@@ -1,5 +1,7 @@
-from runez.conftest import cli
+from runez.conftest import cli, ClickRunner
 
 from uv_metadata import main
 
-cli.default_main = main
+__all__ = ["cli"]
+
+ClickRunner.default_main = main
