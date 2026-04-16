@@ -17,9 +17,24 @@ Works with published packages, local wheels/sdists, project folders, and git rep
 For published packages, metadata is streamed directly from the remote wheel via HTTP range
 requests — typically a few KB, no full download needed.
 
+
+## Why this is useful
+
+Getting package metadata as JSON from a simple CLI opens up a lot of possibilities:
+
+- **Scripting**: what's the latest version of a package? What about the last 2.x release?
+  What's the latest version that still supports Python 3.7?
+  (`uvx uv-metadata -p3.7 setuptools -kversion`)
+- **Validation**: CI checks that verify your package metadata is complete before publishing —
+  are author, URL, license, classifiers all present?
+- **Verifying your own project**: after setting up dynamic versioning (e.g. `setuptools-scm`),
+  just run `uvx uv-metadata .` to confirm your metadata looks right — no need to build or install
+- **Dependency auditing**: quickly check what a package requires, what Python versions it supports,
+  or what entry points it exposes — all without installing anything
+
 This project also serves as a reference implementation for a proposed native
-[`uv metadata`](uv-metadata-spec.md) subcommand
-(see [astral-sh/uv#6037](https://github.com/astral-sh/uv/issues/6037) and the [spec](uv-metadata-spec.md)).
+[`uv metadata`](https://github.com/zsimic/uv-metadata/blob/main/uv-metadata-spec.md) subcommand
+(see [astral-sh/uv#6037](https://github.com/astral-sh/uv/issues/6037) and the [spec](https://github.com/zsimic/uv-metadata/blob/main/uv-metadata-spec.md)).
 
 Requires `uv` on `PATH`.
 
