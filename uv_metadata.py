@@ -13,7 +13,7 @@ from typing import NoReturn
 from zipfile import ZipFile
 
 import pyproject_hooks
-from build import BuildBackendException, ProjectBuilder
+from build import ProjectBuilder
 from build.env import IsolatedEnv
 from seekablehttpfile import SeekableHttpFile
 
@@ -101,7 +101,7 @@ def extract_metadata_from_dist_info(folder: Path) -> dict:
     """Convert a .(egg|dist)-info directory to a clean metadata dict via importlib.metadata"""
     dist = PathDistribution(folder)
     if not dist.metadata:
-        abort(f"no metadata files in {folder.name}")
+        abort(f"No metadata files in {folder.name}")
 
     result: dict = dict(dist.metadata.json)
     eps = dist.entry_points
@@ -139,19 +139,16 @@ def extract_metadata_from_project_folder(project_folder: Path, python: str | Non
 
         run_uv(*venv_args, str(venv_folder), env=env)
         isolated_env = _UvIsolatedEnv(venv_folder)
-        try:
-            builder = ProjectBuilder.from_isolated_env(isolated_env, project_folder, runner=pyproject_hooks.quiet_subprocess_runner)
-            isolated_env.install(builder.build_system_requires)
-            isolated_env.install(builder.get_requires_for_build("wheel"))
-            meta_path = builder.metadata_path(tmpdir_path)
-            return extract_metadata_from_dist_info(Path(meta_path))
-
-        except BuildBackendException as e:
-            abort(_build_backend_problem(e) or str(e))
+        builder = ProjectBuilder.from_isolated_env(isolated_env, project_folder, runner=pyproject_hooks.quiet_subprocess_runner)
+        isolated_env.install(builder.build_system_requires)
+        isolated_env.install(builder.get_requires_for_build("wheel"))
+        meta_path = builder.metadata_path(tmpdir_path)
+        return extract_metadata_from_dist_info(Path(meta_path))
 
 
 def extract_metadata_from_file(path: Path) -> dict:
     """Extract metadata from a local .whl or .tar.gz file"""
+    abort_if(not path.is_file(), f"File '{path}' does not exist")
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
         if path.name.lower().endswith(".whl"):
@@ -205,22 +202,22 @@ def extract_metadata_from_uv_resolve(pip_spec: str, python: str | None = None) -
     r = run_uv(*args, "-", input=pip_spec, fatal=False)
     if r.returncode:
         msg = r.stderr.strip()
-        if "not found in the package registry" in msg:
-            msg = f"Package '{pip_spec!r}' does not exist"
+        if "not found in the package registry" in " ".join(x.strip() for x in msg.splitlines()):
+            msg = f"Package '{pip_spec}' does not exist"
 
         abort(msg)
 
     m = re.search(r'\burl\s*=\s*"([^"]+\.whl)"', r.stdout)
     if not m:
-        abort(f"no wheel available for {pip_spec!r}")
+        abort(f"No wheel available for {pip_spec}")
 
     wheel_url = m.group(1)
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
             streamed = ZipFile(SeekableHttpFile(wheel_url, check_etag=False))  # type: ignore[arg-type]
 
-        except Exception as e:
-            abort(f"can't stream wheel for {pip_spec!r}: {e}")
+        except Exception as e:  # pragma: no cover
+            abort(f"Can't stream wheel for {pip_spec}: {e}")
 
         return _extract_from_zipfile(streamed, Path(tmpdir))
 
@@ -250,7 +247,7 @@ def _extract_from_zipfile(zf: ZipFile, tmpdir: Path) -> dict:
             _extract_dist_info_files(info_dir, m.group(1), names, zf.read)
             return extract_metadata_from_dist_info(info_dir)
 
-    abort("no dist-info found in wheel")
+    abort("No dist-info found in wheel")  # pragma: no cover
 
 
 def _extract_from_tarball(path: Path, tmpdir: Path) -> dict:
@@ -279,7 +276,7 @@ def _extract_from_tarball(path: Path, tmpdir: Path) -> dict:
                 _extract_dist_info_files(fake_info, m.group(1), names, read_fn)
                 return extract_metadata_from_dist_info(fake_info)
 
-    abort(f"no metadata found in {path.name}")
+    abort(f"No metadata found in {path.name}")
 
 
 class _UvIsolatedEnv(IsolatedEnv):
@@ -296,20 +293,6 @@ class _UvIsolatedEnv(IsolatedEnv):
     def install(self, requirements) -> None:
         if requirements:
             run_uv("pip", "install", "--python", self.python_executable, *requirements)
-
-
-def _build_backend_problem(exception) -> str | None:
-    actual = getattr(exception, "exception", exception)
-    output = getattr(actual, "output", None)
-    if isinstance(output, bytes):
-        output = output.decode("utf-8", errors="ignore")
-
-    if output:
-        for line in reversed(output.splitlines()):
-            if line.startswith("AssertionError:"):
-                return "invalid metadata"
-            if re.match(r"^([A-Z][a-z]*)+: (.*)$", line):
-                return line
 
 
 # ---------------------------------------------------------------------------
