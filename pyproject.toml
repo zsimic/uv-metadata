@@ -12,7 +12,7 @@ description = "Inspect any Python package metadata without installing"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{name = "Zoran Simic"}]
-urls = {Homepage = "https://github.com/zsimic/uv-metadata"}
+urls = {Source = "https://github.com/zsimic/uv-metadata"}
 dependencies = [
   "build",
   "pyproject-hooks",  # dependency of build but imported so stated here

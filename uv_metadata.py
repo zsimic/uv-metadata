@@ -395,6 +395,7 @@ def main(args=None):
     meta_dict = get_metadata_from_pip_spec(args.package, args.python)
     if not args.full:
         meta_dict.pop("description", None)
+        meta_dict.pop("dynamic", None)
 
     if args.key is None:
         print(json.dumps(meta_dict, indent=4, sort_keys=True))

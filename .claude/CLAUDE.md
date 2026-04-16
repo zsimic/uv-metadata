@@ -52,6 +52,7 @@ Key design details:
 - `PKG-INFO` files are renamed to `METADATA` before reading so `PathDistribution` handles both formats
 - `UNKNOWN` sentinel values from old metadata are filtered out
 - `description` (long description) is stripped by default; `--full` flag preserves it
+- `dynamic` is stripped by default; `--full` flag preserves it
 - `canonical_git_url()` accepts plain GitHub HTTPS URLs and `git@` SSH shorthand
 
 ## Testing

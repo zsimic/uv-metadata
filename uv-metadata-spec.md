@@ -19,7 +19,7 @@ and general inspection.
 
 - **No install required** for published packages — resolve and stream metadata only
 - **Uniform JSON output** regardless of source (PyPI, local wheel, sdist, git repo, project folder)
-- **Minimal by default** — omit the (often large) `description` field unless `--full` is given
+- **Minimal by default** — omit the (often large) `description` and `dynamic` fields unless `--full` is given
 - **Single package at a time** — fits naturally into shell pipelines and scripting
 
 
