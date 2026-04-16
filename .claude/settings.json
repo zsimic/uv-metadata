@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/pytest *)",
+      "Bash(.venv/bin/uv-metadata *)",
+      "Bash(uv pip *)",
+      "Bash(tox *)",
+      "Bash(ruff *)",
+      "Bash(.tox/typecheck/bin/pyright *)",
+      "Bash(git log *)",
+      "Bash(git diff *)",
+      "Bash(git status *)",
+      "Bash(git branch *)",
+      "Bash(git show *)"
+    ]
+  }
+}

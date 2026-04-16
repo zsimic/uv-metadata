@@ -2,6 +2,8 @@ import json
 
 import runez
 
+from uv_metadata import canonical_git_url
+
 
 def test_bogus(cli):
     cli.run("a--bogus-package-that-does-not-exist--z")
@@ -43,15 +45,20 @@ def test_dist_info(cli):
 
 
 def test_git_url(cli):
-    cli.run(f"-p{runez.SYS_INFO.invoker_python}", "git@github.com:zsimic/uv-metadata.git")
+    # 'git@' urls are not always usable from CI, like GH actions
+    assert canonical_git_url("git@github.com:zsimic/uv-metadata.git") == "git+ssh://git@github.com/zsimic/uv-metadata.git"
+
+    cli.run(f"-p{runez.SYS_INFO.invoker_python}", "https://github.com/zsimic/uv-metadata@main")
     assert cli.succeeded
     assert '"name": "uv-metadata"' in cli.logged.stdout
 
 
-def test_missing_wheel(cli):
+def test_sdist_fallback(cli):
     cli.run("pycparser<2.15")
-    assert cli.failed
-    assert "No wheel available for pycparser<2.15" in cli.logged
+    assert cli.succeeded
+    payload = json.loads(cli.logged.stdout.contents())
+    assert payload["name"] == "pycparser"
+    assert payload["version"] == "2.14"
 
 
 def test_package(cli):
@@ -65,6 +72,11 @@ def test_package(cli):
     cli.run("coverage", "-khome_page")
     assert cli.succeeded
     assert "http" in cli.logged.stdout
+
+    cli.run("six<1")
+    assert cli.succeeded
+    assert "UNKNOWN" not in cli.logged.stdout
+    assert '"version": "0.9.2"' in cli.logged.stdout
 
 
 def test_project_dist(cli):
@@ -87,9 +99,24 @@ def test_project_dist(cli):
     assert cli.succeeded
     assert '"name": "mock",' in cli.logged.stdout
 
+    cli.run(tests_folder / "colorama-0.1.zip")
+    assert cli.succeeded
+    payload = json.loads(cli.logged.stdout.contents())
+    assert payload["name"] == "colorama"
+    assert payload["version"] == "0.1"
+    assert payload["top_level"] == ["colorama"]
+
 
 def test_project_folder(cli):
-    with runez.CurrentFolder(cli.project_folder):
+    project_folder = runez.to_path(cli.project_folder)
+
+    # Exercise an ad-hoc invocation (such as .venv/bin/python <script>), instead of using the regular `bin/` entry point
+    cli.run("--help", main=project_folder / "uv_metadata.py")
+    assert cli.succeeded
+    assert "usage: uv_metadata" in cli.logged.stdout
+
+    # Exercise the "no positional args" case (which looks at current folder by default)
+    with runez.CurrentFolder(project_folder):
         cli.run(f"-p{runez.SYS_INFO.invoker_python}")
         assert cli.succeeded
         payload = json.loads(cli.logged.stdout.contents())
@@ -100,6 +127,19 @@ def test_project_folder(cli):
     cli.run(cli.tests_folder)
     assert cli.failed
     assert "no pyproject.toml or setup.py" in cli.logged
+
+
+def test_full_flag(cli):
+    tests_folder = runez.to_path(cli.tests_folder) / "sample-dist"
+    cli.run(tests_folder / "colorama-0.1.zip")
+    assert cli.succeeded
+    payload = json.loads(cli.logged.stdout.contents())
+    assert "description" not in payload
+
+    cli.run("--full", tests_folder / "colorama-0.1.zip")
+    assert cli.succeeded
+    payload = json.loads(cli.logged.stdout.contents())
+    assert "description" in payload
 
 
 def test_single_key(cli):

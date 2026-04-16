@@ -5,7 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "uv-metadata"
 version = "1.0.0"
+description = "Extract metadata from python packages without installing them"
+readme = "README.md"
 requires-python = ">=3.11"
+authors = [{name = "Zoran Simic"}]
+urls = {Homepage = "https://github.com/zsimic/uv-metadata"}
 dependencies = [
   "build",
   "pyproject-hooks",  # dependency of build but imported so stated here

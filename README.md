@@ -1,10 +1,16 @@
 # uv-metadata
 
-Python proof-of-concept implementation of a proposed `uv metadata` subcommand.
+Python proof-of-concept for a proposed `uv metadata` subcommand.
 
-This repo serves as a reference spec for a future Rust implementation in uv. It demonstrates
-how to fetch Python package metadata from any source — published packages, local files, remote
-wheels, git repos — without performing a full package install where avoidable.
+The goal is to provide a reference implementation and spec that could serve as the basis for a
+native Rust implementation in [uv](https://github.com/astral-sh/uv). A Rust version would be
+even faster — it could skip the Python runtime entirely, leverage uv's existing resolution and
+caching infrastructure, and access package index metadata directly.
+
+This tool extracts Python package metadata from any source — published packages, local files,
+remote wheels, git repos — without performing a full install where avoidable.
+
+See [`uv-metadata-spec.md`](uv-metadata-spec.md) for the proposed `uv metadata` subcommand specification.
 
 `uv` must be available on `PATH`.
 
@@ -18,10 +24,10 @@ The command accepts a single package specification and routes to the appropriate
 | `.`, `./path`, `/abs/path`, or any existing filesystem path | |
 | &emsp;directory with `pyproject.toml` or `setup.py` | Build metadata via PEP 517 (using the `build` library) |
 | &emsp;`*.dist-info` or `*.egg-info` directory | Read directly via `importlib.metadata.PathDistribution` |
-| &emsp;`*.whl` file | Extract dist-info files from the zip archive |
-| &emsp;`*.tar.gz` file | Extract dist-info / egg-info files from the tarball |
+| &emsp;`*.whl` or `*.zip` file | Extract metadata files from the zip archive |
+| &emsp;`*.tar.gz` file | Extract metadata files from the tarball |
 | `git+https://...`, `git@...`, or `pkg @ url` | Install to temp dir via `uv pip install --no-deps --target`, read dist-info |
-| plain name or version constraint (`name`, `name>=x`, etc.) | Resolve wheel URL via `uv pip compile`, stream dist-info via HTTP range requests |
+| plain name or version constraint (`name`, `name>=x`, etc.) | Resolve via `uv pip compile`, stream dist-info from remote wheel via HTTP range requests; fall back to downloading the sdist if no wheel is available |
 
 
 ## Key implementation choices
@@ -35,6 +41,9 @@ For plain package names (`requests`, `requests>=2.28`, ...) a full install is av
 2. The wheel URL is extracted from the TOML output via a simple regex
 3. `SeekableHttpFile` + `ZipFile` issues HTTP range requests to fetch only the dist-info files
    from the remote wheel — typically a few KB instead of downloading the full wheel
+
+When no wheel is available (sdist-only packages), the sdist is downloaded and metadata is
+extracted from its archive directly.
 
 ### Unified metadata reading
 
@@ -50,19 +59,15 @@ is renamed to `METADATA` before reading so `PathDistribution` can find it in eit
 
 ### Archive extraction
 
-Both zip files (wheels) and tarballs (sdists) use the same helper:
+Both zip and tar archives use a shared `MetadataReader` base class. `ZipReader` and `TarReader`
+implement the archive-specific operations (`getmembers`, `filepath`, `read_bytes`), while the
+base class handles finding and extracting metadata files uniformly.
 
-```python
-_extract_dist_info_files(info_dir, prefix, names, read_fn)
-```
+Two compiled regexes drive member matching, built from `METADATA_FILES`:
 
-It iterates over `METADATA_FILES = ("METADATA", "PKG-INFO", "entry_points.txt", "top_level.txt")`,
-copies each that exists under `prefix` into `info_dir` (renaming `PKG-INFO` → `METADATA`), then
-`extract_metadata_from_dist_info` reads the result. This means the local-wheel path and the
-streamed-remote-wheel path share exactly the same extraction code (`_extract_from_zipfile`).
-
-For tarballs, the first match of `*.dist-info/` or `*.egg-info/` containing `METADATA` or
-`PKG-INFO` wins. A fallback handles older sdists that have only a root-level `PKG-INFO`.
+- `_INFO_DIR_RX` — matches `*.dist-info/` or `*.egg-info/` entries containing any of the
+  metadata files (`METADATA`, `PKG-INFO`, `entry_points.txt`, `top_level.txt`)
+- `_ROOT_PKG_INFO_RX` — fallback for older sdists that have only a root-level `PKG-INFO`
 
 ### Metadata key normalization
 
@@ -90,6 +95,7 @@ JSON output with these structural rules:
 - `entry_points`: `{"group": {"name": "module:attr"}}`
 - `top_level`: list of top-level importable names
 - `UNKNOWN` values are omitted entirely
+- `description` (long description) is omitted by default; use `--full` to include it
 
 
 ## Examples
@@ -143,6 +149,13 @@ $ uv-metadata requests -kproject_url
     "Documentation, https://requests.readthedocs.io",
     "Source, https://github.com/psf/requests"
 ]
+```
+
+### Sdist-only package
+
+```shell
+$ uv-metadata 'pycparser<2.15' -kversion
+2.14
 ```
 
 ### Local project folder (PEP 517 build)
@@ -216,17 +229,18 @@ $ uv-metadata 'numpy' -p3.9 -kversion
 ## CLI synopsis
 
 ```
-usage: uv-metadata [-h] [-p PYTHON] [-k KEY] [package]
+usage: uv-metadata [-h] [-p PYTHON] [-k KEY] [--full] [package]
 
 Output the metadata of a package, in machine-readable format
 
 positional arguments:
-  package     Package to inspect (default: current folder)
+  package              Package to inspect (default: current folder)
 
 options:
   -h, --help           show this help message and exit
   -p, --python PYTHON  Python version to target (e.g. 3.11)
   -k, --key KEY        Show only this key from the metadata
+  --full               Include full description in output
 ```
 
 

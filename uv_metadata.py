@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from abc import ABC, abstractmethod
 from importlib.metadata import PathDistribution
 from pathlib import Path
 from typing import NoReturn
@@ -18,6 +19,8 @@ from build.env import IsolatedEnv
 from seekablehttpfile import SeekableHttpFile
 
 METADATA_FILES = ("METADATA", "PKG-INFO", "entry_points.txt", "top_level.txt")
+_INFO_DIR_RX = re.compile(r"^(.+\.(dist|egg)-info)/(" + "|".join(re.escape(f) for f in METADATA_FILES) + r")$")
+_ROOT_PKG_INFO_RX = re.compile(r"^([^/]+)/PKG-INFO$")
 UV_PATH = shutil.which("uv")
 
 
@@ -28,6 +31,17 @@ def abort(msg: str = "") -> NoReturn:
 def abort_if(condition, msg: str = ""):
     if condition:
         sys.exit(msg)
+
+
+def canonical_git_url(url: str) -> str:
+    if url.startswith("git@"):
+        # Autocorrect default git SSH URLs (allows copy-pasting from github.com)
+        url = "git+ssh://" + url.replace(":", "/", 1)
+
+    elif url.startswith("https://") and not url.endswith(".git"):
+        url = f"git+{url}"
+
+    return url
 
 
 def run_uv(*args, fatal=True, env=None, input=None):
@@ -46,7 +60,7 @@ def run_uv(*args, fatal=True, env=None, input=None):
 # ---------------------------------------------------------------------------
 
 
-def get_metadata_from_pip_spec(pip_spec: str | None, python: str | None = None) -> dict:
+def get_metadata_from_pip_spec(pip_spec: str, python: str | None = None) -> dict:
     """
     Get metadata for a package, routing to the best extraction strategy:
 
@@ -80,13 +94,9 @@ def get_metadata_from_pip_spec(pip_spec: str | None, python: str | None = None) 
 
         return extract_metadata_from_project_folder(path, python)
 
-    # Git SSH shorthand: git@github.com:user/repo  or direct reference: pkg @ url
     if "://" in pip_spec or pip_spec.startswith("git@") or (" @ " in pip_spec):
-        if pip_spec.startswith("git@"):
-            # Autocorrect default git SSH URLs (allows copy-pasting from github.com)
-            pip_spec = "git+ssh://" + pip_spec.replace(":", "/", 1)
-
-        return extract_metadata_from_uv_install(pip_spec, python)
+        # Git SSH shorthand: git@github.com:user/repo  or direct reference: pkg @ url
+        return extract_metadata_from_uv_install(canonical_git_url(pip_spec), python)
 
     # Plain package name (optionally version-constrained): use fast resolve path
     return extract_metadata_from_uv_resolve(pip_spec, python)
@@ -103,7 +113,17 @@ def extract_metadata_from_dist_info(folder: Path) -> dict:
     if not dist.metadata:
         abort(f"No metadata files in {folder.name}")
 
-    result: dict = dict(dist.metadata.json)
+    result: dict = {}
+    for key, value in dist.metadata.json.items():
+        if isinstance(value, list):
+            value = [v for v in value if v != "UNKNOWN"]
+
+        elif value == "UNKNOWN":
+            value = None
+
+        if value:
+            result[key] = value
+
     eps = dist.entry_points
     if eps:
         grouped: dict = {}
@@ -151,11 +171,9 @@ def extract_metadata_from_file(path: Path) -> dict:
     abort_if(not path.is_file(), f"File '{path}' does not exist")
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
-        if path.name.lower().endswith((".whl", ".zip")):
-            with ZipFile(path) as zf:
-                return _extract_from_zipfile(zf, tmpdir_path)
-
-        return _extract_from_tarball(path, tmpdir_path)
+        reader_type = ZipReader if path.name.lower().endswith((".whl", ".zip")) else TarReader
+        with reader_type(path) as reader:
+            return reader.extracted_metadata_members(tmpdir_path)
 
 
 def extract_metadata_from_uv_install(pip_spec: str, python: str | None = None) -> dict:
@@ -178,7 +196,7 @@ def extract_metadata_from_uv_resolve(pip_spec: str, python: str | None = None) -
 
     Uses 'uv pip compile --format pylock.toml' to find the wheel URL, then streams
     only the metadata section from the remote .whl via HTTP range requests.
-    Aborts if the package has no wheel (sdist-only packages are not supported here).
+    Falls back to downloading the sdist when no wheel is available.
     """
     args = [
         "-q",
@@ -200,26 +218,25 @@ def extract_metadata_from_uv_resolve(pip_spec: str, python: str | None = None) -
         python or "99",
     ]
     r = run_uv(*args, "-", input=pip_spec, fatal=False)
-    if r.returncode:
-        msg = r.stderr.strip()
-        if "not found in the package registry" in " ".join(x.strip() for x in msg.splitlines()):
-            msg = f"Package '{pip_spec}' does not exist"
+    if not r.returncode and r.stdout:
+        m = re.search(r'\burl\s*=\s*"([^"]+\.whl)"', r.stdout)
+        if m:
+            wheel_url = m.group(1)
+            with tempfile.TemporaryDirectory() as tmpdir:
+                streamed = SeekableHttpFile(wheel_url, check_etag=False)
+                with ZipReader(streamed) as reader:
+                    return reader.extracted_metadata_members(Path(tmpdir))
 
-        abort(msg)
+        # Fallback: download sdist and extract metadata from it
+        m = re.search(r'\burl\s*=\s*"([^"]+)"', r.stdout)
+        if m:
+            return _download_and_extract(m.group(1))
 
-    m = re.search(r'\burl\s*=\s*"([^"]+\.whl)"', r.stdout)
-    if not m:
-        abort(f"No wheel available for {pip_spec}")
+    msg = (r.stderr or "uv resolve failed with an empty stderr").strip()
+    if "not found in the package registry" in " ".join(x.strip() for x in msg.splitlines()):
+        msg = f"Package '{pip_spec}' does not exist"
 
-    wheel_url = m.group(1)
-    with tempfile.TemporaryDirectory() as tmpdir:
-        try:
-            streamed = ZipFile(SeekableHttpFile(wheel_url, check_etag=False))  # type: ignore[arg-type]
-
-        except Exception as e:  # pragma: no cover
-            abort(f"Can't stream wheel for {pip_spec}: {e}")
-
-        return _extract_from_zipfile(streamed, Path(tmpdir))
+    abort(msg)
 
 
 # ---------------------------------------------------------------------------
@@ -227,56 +244,112 @@ def extract_metadata_from_uv_resolve(pip_spec: str, python: str | None = None) -
 # ---------------------------------------------------------------------------
 
 
-def _extract_dist_info_files(info_dir: Path, prefix: str, names: set[str], read_fn) -> None:
-    """Copy dist-info metadata files from an archive into info_dir"""
-    info_dir.mkdir(parents=True, exist_ok=True)
-    for filename in METADATA_FILES:
-        src = f"{prefix}/{filename}"
-        if src in names:
-            dest = "METADATA" if filename == "PKG-INFO" else filename
-            (info_dir / dest).write_bytes(read_fn(src))
+def _download_and_extract(url: str) -> dict:
+    """Download an archive from a URL and extract metadata from it"""
+    from urllib.request import urlopen
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        dest = Path(tmpdir) / url.rsplit("/", 1)[-1]
+        with urlopen(url) as resp:
+            dest.write_bytes(resp.read())
+
+        return extract_metadata_from_file(dest)
 
 
-def _extract_from_zipfile(zf: ZipFile, tmpdir: Path) -> dict:
-    """Extract metadata from an open ZipFile (local wheel or streamed remote wheel)"""
-    names = set(zf.namelist())
-    for name in zf.namelist():
-        m = re.match(r"^([^/]+\.dist-info)/(?:METADATA|PKG-INFO)$", name)
-        if m:
-            info_dir = tmpdir / m.group(1)
-            _extract_dist_info_files(info_dir, m.group(1), names, zf.read)
-            return extract_metadata_from_dist_info(info_dir)
+class MetadataReader(ABC):
+    """Context manager that abstracts extraction of metadata from zip/tar files"""
 
-    abort("No dist-info found in wheel")
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        self.close()
+
+    @abstractmethod
+    def close(self) -> None:
+        """Release underlying archive resources"""
+
+    def find_metadata_members(self) -> list:
+        """Find archive members containing package metadata.
+
+        Prefers .dist-info/.egg-info directories, falls back to root-level PKG-INFO.
+        """
+        members = self.getmembers()
+        matched = [m for m in members if _INFO_DIR_RX.match(self.filepath(m))]
+        if not matched:
+            matched = [m for m in members if _ROOT_PKG_INFO_RX.match(self.filepath(m))]
+
+        abort_if(not matched, f"No metadata found in {self}")
+        return matched
+
+    def extracted_metadata_members(self, tmpdir: Path) -> dict:
+        members = self.find_metadata_members()
+        info_dir = tmpdir / "tmp.dist-info"
+        info_dir.mkdir()
+        for m in members:
+            b = self.read_bytes(m)
+            name = os.path.basename(self.filepath(m))
+            if name == "PKG-INFO":
+                name = "METADATA"
+
+            (info_dir / name).write_bytes(b)
+
+        return extract_metadata_from_dist_info(info_dir)
+
+    @abstractmethod
+    def filepath(self, member) -> str:
+        """Path of `member` within the archive"""
+
+    @abstractmethod
+    def getmembers(self) -> list:
+        """Return a list of contained file members"""
+
+    @abstractmethod
+    def read_bytes(self, member) -> bytes:
+        """Read bytes from `member`"""
 
 
-def _extract_from_tarball(path: Path, tmpdir: Path) -> dict:
-    """Extract metadata from an sdist .tar.gz"""
-    with tarfile.open(path) as tf:
-        members = {m.name: m for m in tf.getmembers() if m.isfile()}
-        names = set(members.keys())
+class ZipReader(MetadataReader):
+    def __init__(self, source: Path | SeekableHttpFile):
+        self.source = source
+        self.zip_file = ZipFile(source)  # type: ignore[arg-type]
 
-        def read_fn(src: str) -> bytes:
-            f = tf.extractfile(members[src])
-            return f.read() if f else b""
+    def __repr__(self):
+        return str(self.source)
 
-        for name in members:
-            m = re.search(r"^(.+\.(dist|egg)-info)/(?:METADATA|PKG-INFO)$", name)
-            if m:
-                prefix = m.group(1)
-                info_dir = tmpdir / Path(prefix).name
-                _extract_dist_info_files(info_dir, prefix, names, read_fn)
-                return extract_metadata_from_dist_info(info_dir)
+    def close(self) -> None:
+        self.zip_file.close()
 
-        # Fallback: root-level PKG-INFO (some older sdists)
-        for name in members:
-            m = re.match(r"^([^/]+)/PKG-INFO$", name)
-            if m:
-                fake_info = tmpdir / "package.dist-info"
-                _extract_dist_info_files(fake_info, m.group(1), names, read_fn)
-                return extract_metadata_from_dist_info(fake_info)
+    def filepath(self, member) -> str:
+        return member.filename
 
-    abort(f"No metadata found in {path.name}")
+    def getmembers(self) -> list:
+        return self.zip_file.filelist
+
+    def read_bytes(self, member) -> bytes:
+        return self.zip_file.read(member.filename)
+
+
+class TarReader(MetadataReader):
+    def __init__(self, path: Path):
+        self.path = path
+        self.tar_file = tarfile.open(path)
+
+    def __repr__(self):
+        return str(self.path)
+
+    def close(self) -> None:
+        self.tar_file.close()
+
+    def filepath(self, member) -> str:
+        return member.name
+
+    def getmembers(self) -> list:
+        return self.tar_file.getmembers()
+
+    def read_bytes(self, member) -> bytes:
+        f = self.tar_file.extractfile(member)
+        return f.read() if f else b""
 
 
 class _UvIsolatedEnv(IsolatedEnv):
@@ -315,10 +388,14 @@ def main(args=None):
     parser = argparse.ArgumentParser(description=main.__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("-p", "--python", help="Python version to target (e.g. 3.11)")
     parser.add_argument("-k", "--key", help="Show only this key from the metadata")
+    parser.add_argument("--full", action="store_true", help="Include full description in output")
     parser.add_argument("package", default=None, nargs="?", help="Package to inspect (default: current folder)")
     args = parser.parse_args(args=args)
 
     meta_dict = get_metadata_from_pip_spec(args.package, args.python)
+    if not args.full:
+        meta_dict.pop("description", None)
+
     if args.key is None:
         print(json.dumps(meta_dict, indent=4, sort_keys=True))
 
@@ -328,5 +405,5 @@ def main(args=None):
         print(value if isinstance(value, str) else json.dumps(value, indent=4, sort_keys=True))
 
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":
     sys.exit(main())
