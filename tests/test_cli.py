@@ -48,6 +48,12 @@ def test_git_url(cli):
     assert '"name": "uv-metadata"' in cli.logged.stdout
 
 
+def test_missing_wheel(cli):
+    cli.run("pycparser<2.15")
+    assert cli.failed
+    assert "No wheel available for pycparser<2.15" in cli.logged
+
+
 def test_package(cli):
     cli.run("pip")
     assert cli.succeeded
@@ -64,16 +70,22 @@ def test_package(cli):
 def test_project_dist(cli):
     tests_folder = runez.to_path(cli.tests_folder) / "sample-dist"
     cli.run(tests_folder / "uv_metadata-1.0.0.tar.gz")
+    assert cli.succeeded
     payload = json.loads(cli.logged.stdout.contents())
     assert payload["entry_points"]["console_scripts"]["uv-metadata"] == "uv_metadata:main"
     assert payload["name"] == "uv-metadata"
     assert payload["top_level"] == ["uv_metadata"]
 
     cli.run(tests_folder / "uv_metadata-1.0.0-py3-none-any.whl")
+    assert cli.succeeded
     payload = json.loads(cli.logged.stdout.contents())
     assert payload["entry_points"]["console_scripts"]["uv-metadata"] == "uv_metadata:main"
     assert payload["name"] == "uv-metadata"
     assert payload["top_level"] == ["uv_metadata"]
+
+    cli.run(tests_folder / "mock-0.6.0.tar.gz")
+    assert cli.succeeded
+    assert '"name": "mock",' in cli.logged.stdout
 
 
 def test_project_folder(cli):

@@ -46,7 +46,7 @@ def run_uv(*args, fatal=True, env=None, input=None):
 # ---------------------------------------------------------------------------
 
 
-def get_metadata(pip_spec: str | None, python: str | None = None) -> dict:
+def get_metadata_from_pip_spec(pip_spec: str | None, python: str | None = None) -> dict:
     """
     Get metadata for a package, routing to the best extraction strategy:
 
@@ -59,11 +59,11 @@ def get_metadata(pip_spec: str | None, python: str | None = None) -> dict:
 
     Examples::
 
-        get_metadata(".")
-        get_metadata("requests")
-        get_metadata("requests>=2.28")
-        get_metadata("./dist/mypackage-1.0.0.whl")
-        get_metadata("git+https://github.com/user/repo@main")
+        get_metadata_from_pip_spec(".")
+        get_metadata_from_pip_spec("requests")
+        get_metadata_from_pip_spec("requests>=2.28")
+        get_metadata_from_pip_spec("./dist/mypackage-1.0.0.whl")
+        get_metadata_from_pip_spec("git+https://github.com/user/repo@main")
     """
     if not pip_spec:
         pip_spec = str(Path(".").absolute())
@@ -72,7 +72,7 @@ def get_metadata(pip_spec: str | None, python: str | None = None) -> dict:
     if pip_spec.startswith(("~", ".", "/")) or os.path.exists(pip_spec):
         path = Path(pip_spec).expanduser().resolve()
         if not path.is_dir():
-            abort_if(not path.name.lower().endswith((".whl", ".tar.gz")), f"Unknown package type '{path.name}'")
+            abort_if(not path.name.lower().endswith((".whl", ".zip", ".tar.gz")), f"Unknown package type '{path.name}'")
             return extract_metadata_from_file(path)
 
         if path.name.lower().endswith("-info"):
@@ -151,7 +151,7 @@ def extract_metadata_from_file(path: Path) -> dict:
     abort_if(not path.is_file(), f"File '{path}' does not exist")
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
-        if path.name.lower().endswith(".whl"):
+        if path.name.lower().endswith((".whl", ".zip")):
             with ZipFile(path) as zf:
                 return _extract_from_zipfile(zf, tmpdir_path)
 
@@ -247,7 +247,7 @@ def _extract_from_zipfile(zf: ZipFile, tmpdir: Path) -> dict:
             _extract_dist_info_files(info_dir, m.group(1), names, zf.read)
             return extract_metadata_from_dist_info(info_dir)
 
-    abort("No dist-info found in wheel")  # pragma: no cover
+    abort("No dist-info found in wheel")
 
 
 def _extract_from_tarball(path: Path, tmpdir: Path) -> dict:
@@ -318,7 +318,7 @@ def main(args=None):
     parser.add_argument("package", default=None, nargs="?", help="Package to inspect (default: current folder)")
     args = parser.parse_args(args=args)
 
-    meta_dict = get_metadata(args.package, args.python)
+    meta_dict = get_metadata_from_pip_spec(args.package, args.python)
     if args.key is None:
         print(json.dumps(meta_dict, indent=4, sort_keys=True))
 
