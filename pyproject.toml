@@ -8,7 +8,7 @@ local_scheme = "dirty-tag"
 [project]
 name = "uv-metadata"
 dynamic = ["version"]
-description = "Extract metadata from python packages without installing them"
+description = "Inspect any Python package metadata without installing"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{name = "Zoran Simic"}]

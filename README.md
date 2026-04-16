@@ -1,6 +1,6 @@
 # uv-metadata
 
-Extract Python package metadata from any source without installing.
+Inspect any Python package metadata from any source without installing.
 
 ```shell
 $ uvx uv-metadata requests -kversion
