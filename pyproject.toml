@@ -1,10 +1,13 @@
 [build-system]
-requires = ["setuptools"]
+requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+local_scheme = "dirty-tag"
 
 [project]
 name = "uv-metadata"
-version = "1.0.0"
+dynamic = ["version"]
 description = "Extract metadata from python packages without installing them"
 readme = "README.md"
 requires-python = ">=3.11"

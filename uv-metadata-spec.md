@@ -1,6 +1,7 @@
 # Proposed `uv metadata` subcommand
 
-This document describes the behavior of a proposed `uv metadata` subcommand. The Python
+This document describes the behavior of a proposed `uv metadata` subcommand
+(see [astral-sh/uv#6037](https://github.com/astral-sh/uv/issues/6037)). The Python
 proof-of-concept in this repo ([`uv_metadata.py`](uv_metadata.py)) implements this spec and
 can serve as a reference for a native Rust implementation in uv.
 
