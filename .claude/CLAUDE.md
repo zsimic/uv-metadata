@@ -10,7 +10,7 @@ Published on PyPI as `uv-metadata`, runnable via `uvx uv-metadata`. Requires `uv
 ## Commands
 
 ```shell
-# Run all checks (tests on py311+py314, coverage, ruff, pyright)
+# Run all checks (tests on py310+py314, coverage, ruff, pyright)
 tox
 
 # Run tests only (single Python version)
