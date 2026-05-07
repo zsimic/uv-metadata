@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import re
 import shutil
@@ -394,6 +395,8 @@ def main(args=None):
     parser.add_argument("package", default=None, nargs="?", help="Package to inspect (default: current folder)")
     args = parser.parse_args(args=args)
 
+    # Silence `build` module logging, too chatty
+    logging.getLogger("build").setLevel(logging.WARNING)
     meta_dict = get_metadata_from_pip_spec(args.package, args.python)
     if not args.full:
         meta_dict.pop("description", None)
