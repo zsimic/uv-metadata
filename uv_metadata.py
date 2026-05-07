@@ -26,6 +26,9 @@ _INFO_DIR_RX = re.compile(r"^(.+\.(dist|egg)-info)/(" + "|".join(re.escape(f) fo
 _ROOT_PKG_INFO_RX = re.compile(r"^([^/]+)/PKG-INFO$")
 UV_PATH = shutil.which("uv")
 
+# Silence `build` module logging, too chatty
+logging.getLogger("build").setLevel(logging.WARNING)
+
 
 def abort(msg: str = "") -> NoReturn:
     sys.exit(msg)
@@ -395,8 +398,6 @@ def main(args=None):
     parser.add_argument("package", default=None, nargs="?", help="Package to inspect (default: current folder)")
     args = parser.parse_args(args=args)
 
-    # Silence `build` module logging, too chatty
-    logging.getLogger("build").setLevel(logging.WARNING)
     meta_dict = get_metadata_from_pip_spec(args.package, args.python)
     if not args.full:
         meta_dict.pop("description", None)
