@@ -20,7 +20,7 @@ jobs:
     - uses: actions/setup-python@v6
       with:
         python-version: ${{ matrix.python-version }}
-    - uses: astral-sh/setup-uv@v8.0.0
+    - uses: astral-sh/setup-uv@v8.1.0
     - run: uv venv
     - run: uv pip install -U tox-uv
     - run: .venv/bin/tox -e py
@@ -34,7 +34,7 @@ jobs:
     - uses: actions/setup-python@v6
       with:
         python-version: "3.14"
-    - uses: astral-sh/setup-uv@v8.0.0
+    - uses: astral-sh/setup-uv@v8.1.0
     - run: uv venv
     - run: uv pip install -U tox-uv
     - run: .venv/bin/tox -e style
