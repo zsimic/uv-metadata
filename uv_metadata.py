@@ -21,9 +21,10 @@ from build import ProjectBuilder
 from build.env import IsolatedEnv
 from seekablehttpfile import SeekableHttpFile
 
+CANONICAL_KEY = {"classifier": "classifiers"}
 METADATA_FILES = ("METADATA", "PKG-INFO", "entry_points.txt", "top_level.txt")
-_INFO_DIR_RX = re.compile(r"^(.+\.(dist|egg)-info)/(" + "|".join(re.escape(f) for f in METADATA_FILES) + r")$")
-_ROOT_PKG_INFO_RX = re.compile(r"^([^/]+)/PKG-INFO$")
+INFO_DIR_RX = re.compile(r"^(.+\.(dist|egg)-info)/(" + "|".join(re.escape(f) for f in METADATA_FILES) + r")$")
+ROOT_PKG_INFO_RX = re.compile(r"^([^/]+)/PKG-INFO$")
 UV_PATH = shutil.which("uv")
 
 # Silence `build` module logging, too chatty
@@ -48,6 +49,12 @@ def canonical_git_url(url: str) -> str:
         url = f"git+{url}"
 
     return url
+
+
+def canonical_key(key: str, replace_with="_") -> str:
+    # See https://github.com/jwilk-mirrors/python-pkginfo/blob/master/pkginfo/distribution.py#L34
+    key = re.sub(r"\W", replace_with, key).lower()
+    return CANONICAL_KEY.get(key, key)
 
 
 def run_uv(*args, fatal=True, env=None, input=None):
@@ -113,6 +120,25 @@ def get_metadata_from_pip_spec(pip_spec: str, python: str | None = None) -> dict
 # ---------------------------------------------------------------------------
 
 
+def _metadata_as_json(metadata) -> dict:
+    """Use stdlib `Message.json` when available (py3.10+); minimal equivalent otherwise (py3.9)"""
+    if hasattr(metadata, "json"):
+        return metadata.json
+
+    out: dict = {}
+    for key, value in metadata.items():
+        json_name = canonical_key(key)
+        prev = out.get(json_name)
+        if prev is None:
+            out[json_name] = value
+        elif isinstance(prev, list):
+            prev.append(value)
+        else:
+            out[json_name] = [prev, value]
+
+    return out
+
+
 def extract_metadata_from_dist_info(folder: Path) -> dict:
     """Convert a .(egg|dist)-info directory to a clean metadata dict via importlib.metadata"""
     dist = PathDistribution(folder)
@@ -120,7 +146,7 @@ def extract_metadata_from_dist_info(folder: Path) -> dict:
         abort(f"No metadata files in {folder.name}")
 
     result: dict = {}
-    for key, value in dist.metadata.json.items():
+    for key, value in _metadata_as_json(dist.metadata).items():
         if isinstance(value, list):
             value = [v for v in value if v != "UNKNOWN"]
 
@@ -281,9 +307,9 @@ class MetadataReader(ABC):
         Prefers .dist-info/.egg-info directories, falls back to root-level PKG-INFO.
         """
         members = self.getmembers()
-        matched = [m for m in members if _INFO_DIR_RX.match(self.filepath(m))]
+        matched = [m for m in members if INFO_DIR_RX.match(self.filepath(m))]
         if not matched:
-            matched = [m for m in members if _ROOT_PKG_INFO_RX.match(self.filepath(m))]
+            matched = [m for m in members if ROOT_PKG_INFO_RX.match(self.filepath(m))]
 
         abort_if(not matched, f"No metadata found in {self}")
         return matched

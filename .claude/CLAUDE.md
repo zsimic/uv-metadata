@@ -10,7 +10,7 @@ Published on PyPI as `uv-metadata`, runnable via `uvx uv-metadata`. Requires `uv
 ## Commands
 
 ```shell
-# Run all checks (tests on py310+py314, coverage, ruff, pyright)
+# Run all checks (tests on py39+py314, coverage, ruff, pyright)
 tox
 
 # Run tests only (single Python version)
@@ -66,6 +66,10 @@ def test_example(cli):
 ```
 
 Test fixtures in `tests/sample-dist/` include real archived packages (colorama, mock, uv-metadata itself).
+
+`dist/` (gitignored) holds locally downloaded wheels/sdists for ad-hoc inspection — populate with
+`.venv/bin/pip download --dest dist/ --no-deps <pkg>` (add `--no-binary=:all:` for an sdist).
+Useful for poking at real-world metadata with `.venv/bin/uv-metadata dist/<file>`.
 
 ## Versioning
 
