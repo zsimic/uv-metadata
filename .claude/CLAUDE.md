@@ -10,7 +10,7 @@ Published on PyPI as `uv-metadata`, runnable via `uvx uv-metadata`. Requires `uv
 ## Commands
 
 ```shell
-# Run all checks (tests on py39+py314, coverage, ruff, pyright)
+# Run all checks (tests on py310+py314, coverage, ruff, pyright)
 tox
 
 # Run tests only (single Python version)
@@ -48,7 +48,7 @@ All logic lives in `uv_metadata.py`. The flow is:
 
 Key design details:
 - Archive extraction uses a `MetadataReader` ABC with `ZipReader` and `TarReader` subclasses (context managers)
-- Two compiled regexes (`_INFO_DIR_RX`, `_ROOT_PKG_INFO_RX`) drive metadata file discovery, built from the `METADATA_FILES` tuple
+- Two compiled regexes (`INFO_DIR_RX`, `ROOT_PKG_INFO_RX`) drive metadata file discovery, built from the `METADATA_FILES` tuple
 - `PKG-INFO` files are renamed to `METADATA` before reading so `PathDistribution` handles both formats
 - `UNKNOWN` sentinel values from old metadata are filtered out
 - `description` (long description) is stripped by default; `--full` flag preserves it

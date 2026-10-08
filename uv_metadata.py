@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import argparse
 import json
 import logging
@@ -21,7 +19,6 @@ from build import ProjectBuilder
 from build.env import IsolatedEnv
 from seekablehttpfile import SeekableHttpFile
 
-CANONICAL_KEY = {"classifier": "classifiers"}
 METADATA_FILES = ("METADATA", "PKG-INFO", "entry_points.txt", "top_level.txt")
 INFO_DIR_RX = re.compile(r"^(.+\.(dist|egg)-info)/(" + "|".join(re.escape(f) for f in METADATA_FILES) + r")$")
 ROOT_PKG_INFO_RX = re.compile(r"^([^/]+)/PKG-INFO$")
@@ -49,12 +46,6 @@ def canonical_git_url(url: str) -> str:
         url = f"git+{url}"
 
     return url
-
-
-def canonical_key(key: str, replace_with="_") -> str:
-    # See https://github.com/jwilk-mirrors/python-pkginfo/blob/master/pkginfo/distribution.py#L34
-    key = re.sub(r"\W", replace_with, key).lower()
-    return CANONICAL_KEY.get(key, key)
 
 
 def run_uv(*args, fatal=True, env=None, input=None):
@@ -120,33 +111,15 @@ def get_metadata_from_pip_spec(pip_spec: str, python: str | None = None) -> dict
 # ---------------------------------------------------------------------------
 
 
-def _metadata_as_json(metadata) -> dict:
-    """Use stdlib `Message.json` when available (py3.10+); minimal equivalent otherwise (py3.9)"""
-    if hasattr(metadata, "json"):
-        return metadata.json
-
-    out: dict = {}
-    for key, value in metadata.items():
-        json_name = canonical_key(key)
-        prev = out.get(json_name)
-        if prev is None:
-            out[json_name] = value
-        elif isinstance(prev, list):
-            prev.append(value)
-        else:
-            out[json_name] = [prev, value]
-
-    return out
-
-
 def extract_metadata_from_dist_info(folder: Path) -> dict:
     """Convert a .(egg|dist)-info directory to a clean metadata dict via importlib.metadata"""
     dist = PathDistribution(folder)
-    if not dist.metadata:
+    metadata = dist.metadata
+    if not metadata:
         abort(f"No metadata files in {folder.name}")
 
     result: dict = {}
-    for key, value in _metadata_as_json(dist.metadata).items():
+    for key, value in metadata.json.items():
         if isinstance(value, list):
             value = [v for v in value if v != "UNKNOWN"]
 
@@ -201,11 +174,9 @@ def extract_metadata_from_project_folder(project_folder: Path, python: str | Non
 def extract_metadata_from_file(path: Path) -> dict:
     """Extract metadata from a local .whl or .tar.gz file"""
     abort_if(not path.is_file(), f"File '{path}' does not exist")
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmpdir_path = Path(tmpdir)
-        reader_type = ZipReader if path.name.lower().endswith((".whl", ".zip")) else TarReader
-        with reader_type(path) as reader:
-            return reader.extracted_metadata_members(tmpdir_path)
+    reader_type = ZipReader if path.name.lower().endswith((".whl", ".zip")) else TarReader
+    with tempfile.TemporaryDirectory() as tmpdir, reader_type(path) as reader:
+        return reader.extracted_metadata_members(Path(tmpdir))
 
 
 def extract_metadata_from_uv_install(pip_spec: str, python: str | None = None) -> dict:
@@ -253,11 +224,9 @@ def extract_metadata_from_uv_resolve(pip_spec: str, python: str | None = None) -
     if not r.returncode and r.stdout:
         m = re.search(r'\burl\s*=\s*"([^"]+\.whl)"', r.stdout)
         if m:
-            wheel_url = m.group(1)
-            with tempfile.TemporaryDirectory() as tmpdir:
-                streamed = SeekableHttpFile(wheel_url, check_etag=False)
-                with ZipReader(streamed) as reader:
-                    return reader.extracted_metadata_members(Path(tmpdir))
+            streamed = SeekableHttpFile(m.group(1), check_etag=False)
+            with tempfile.TemporaryDirectory() as tmpdir, ZipReader(streamed) as reader:
+                return reader.extracted_metadata_members(Path(tmpdir))
 
         # Fallback: download sdist and extract metadata from it
         m = re.search(r'\burl\s*=\s*"([^"]+)"', r.stdout)
@@ -291,8 +260,9 @@ def _download_and_extract(url: str) -> dict:
 class MetadataReader(ABC):
     """Context manager that abstracts extraction of metadata from zip/tar files"""
 
-    def __enter__(self):
-        return self
+    @abstractmethod
+    def __enter__(self) -> "MetadataReader":
+        """Open underlying archive"""
 
     def __exit__(self, *_args):
         self.close()
@@ -344,7 +314,10 @@ class MetadataReader(ABC):
 class ZipReader(MetadataReader):
     def __init__(self, source: Path | SeekableHttpFile):
         self.source = source
-        self.zip_file = ZipFile(source)  # type: ignore[arg-type]
+
+    def __enter__(self):
+        self.zip_file = ZipFile(self.source)  # type: ignore[arg-type]
+        return self
 
     def __repr__(self):
         return str(self.source)
@@ -365,7 +338,10 @@ class ZipReader(MetadataReader):
 class TarReader(MetadataReader):
     def __init__(self, path: Path):
         self.path = path
-        self.tar_file = tarfile.open(path)
+
+    def __enter__(self):
+        self.tar_file = tarfile.open(self.path)
+        return self
 
     def __repr__(self):
         return str(self.path)

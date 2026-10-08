@@ -20,7 +20,7 @@ def test_dist_info(cli):
     runez.ensure_folder("sample/sample-1.0.dist-info", logger=None)
     cli.run("sample/sample-1.0.dist-info")
     assert cli.failed
-    assert "No metadata files in sample-1.0.dist-info"
+    assert "No metadata files in sample-1.0.dist-info" in cli.logged
 
     # Build a minimal .whl and then run against the extracted dist-info
     meta = "Metadata-Version: 2.1\nName: sample\nVersion: 1.0\nSummary: A test package\n"
