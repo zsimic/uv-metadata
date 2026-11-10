@@ -22,7 +22,7 @@ from seekablehttpfile import SeekableHttpFile
 METADATA_FILES = ("METADATA", "PKG-INFO", "entry_points.txt", "top_level.txt")
 INFO_DIR_RX = re.compile(r"^(.+\.(dist|egg)-info)/(" + "|".join(re.escape(f) for f in METADATA_FILES) + r")$")
 ROOT_PKG_INFO_RX = re.compile(r"^([^/]+)/PKG-INFO$")
-UV_PATH = shutil.which("uv")
+UV_PATH = os.environ.get("UV") or shutil.which("uv")  # `uv run` / `uvx` set $UV to the uv running them
 
 # Silence `build` module logging, too chatty
 logging.getLogger("build").setLevel(logging.WARNING)

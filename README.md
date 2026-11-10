@@ -36,7 +36,7 @@ This project also serves as a reference implementation for a proposed native
 [`uv metadata`](https://github.com/zsimic/uv-metadata/blob/main/uv-metadata-spec.md) subcommand
 (see [astral-sh/uv#6037](https://github.com/astral-sh/uv/issues/6037) and the [spec](https://github.com/zsimic/uv-metadata/blob/main/uv-metadata-spec.md)).
 
-Requires `uv` on `PATH`.
+Requires `uv`: the one running it (`uvx` / `uv run` set `$UV`), or else `uv` on `PATH`.
 
 
 ## Installation
