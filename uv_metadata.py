@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from importlib.metadata import PathDistribution
 from pathlib import Path
 from typing import NoReturn
+from urllib.parse import urlsplit
 from zipfile import ZipFile
 
 import pyproject_hooks
@@ -71,7 +72,8 @@ def get_metadata_from_pip_spec(pip_spec: str, python: str | None = None) -> dict
     - local folder (contains pyproject.toml or setup.py) → build metadata via ProjectBuilder
     - local *.dist-info or *.egg-info folder → read directly
     - local .whl or .tar.gz file → extract from archive
-    - git URL or direct reference → install to temp dir, read dist-info
+    - http(s) URL of a .whl (optionally as 'name @ url') → stream only its metadata
+    - git URL or other direct reference → install to temp dir, read dist-info
     - plain package name (optionally version-constrained) → resolve via uv without installing,
       then stream only the metadata from the remote wheel (much faster than a full install)
 
@@ -81,6 +83,7 @@ def get_metadata_from_pip_spec(pip_spec: str, python: str | None = None) -> dict
         get_metadata_from_pip_spec("requests")
         get_metadata_from_pip_spec("requests>=2.28")
         get_metadata_from_pip_spec("./dist/mypackage-1.0.0.whl")
+        get_metadata_from_pip_spec("https://example.com/mypackage-1.0.0-py3-none-any.whl")
         get_metadata_from_pip_spec("git+https://github.com/user/repo@main")
     """
     if not pip_spec:
@@ -98,6 +101,10 @@ def get_metadata_from_pip_spec(pip_spec: str, python: str | None = None) -> dict
 
         return extract_metadata_from_project_folder(path, python)
 
+    url = wheel_url(pip_spec)
+    if url:
+        return get_metadata_from_wheel_url(url)
+
     if "://" in pip_spec or pip_spec.startswith("git@") or (" @ " in pip_spec):
         # Git SSH shorthand: git@github.com:user/repo  or direct reference: pkg @ url
         return extract_metadata_from_uv_install(canonical_git_url(pip_spec), python)
@@ -109,6 +116,26 @@ def get_metadata_from_pip_spec(pip_spec: str, python: str | None = None) -> dict
 # ---------------------------------------------------------------------------
 # Extraction functions
 # ---------------------------------------------------------------------------
+
+
+def wheel_url(pip_spec: str) -> str | None:
+    """The http(s) URL of a .whl, if that's what 'pip_spec' is (bare, or as 'name @ url')"""
+    url = pip_spec.partition(" @ ")[2].strip() or pip_spec.strip()
+    parts = urlsplit(url)
+    if parts.scheme in ("http", "https") and parts.path.lower().endswith(".whl"):
+        return url
+
+    return None
+
+
+def get_metadata_from_wheel_url(url: str) -> dict:
+    """
+    Metadata of a remote .whl, without downloading it: HTTP range requests fetch only the zip's
+    central directory and its .dist-info metadata members.
+    """
+    streamed = SeekableHttpFile(url, check_etag=False)
+    with tempfile.TemporaryDirectory() as tmpdir, ZipReader(streamed) as reader:
+        return reader.extracted_metadata_members(Path(tmpdir))
 
 
 def extract_metadata_from_dist_info(folder: Path) -> dict:
@@ -224,9 +251,7 @@ def extract_metadata_from_uv_resolve(pip_spec: str, python: str | None = None) -
     if not r.returncode and r.stdout:
         m = re.search(r'\burl\s*=\s*"([^"]+\.whl)"', r.stdout)
         if m:
-            streamed = SeekableHttpFile(m.group(1), check_etag=False)
-            with tempfile.TemporaryDirectory() as tmpdir, ZipReader(streamed) as reader:
-                return reader.extracted_metadata_members(Path(tmpdir))
+            return get_metadata_from_wheel_url(m.group(1))
 
         # Fallback: download sdist and extract metadata from it
         m = re.search(r'\burl\s*=\s*"([^"]+)"', r.stdout)

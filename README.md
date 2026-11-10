@@ -68,6 +68,9 @@ uvx uv-metadata .
 # Local wheel or sdist
 uvx uv-metadata ./dist/mypackage-1.0.0-py3-none-any.whl
 
+# Remote wheel (only its dist-info gets downloaded)
+uvx uv-metadata https://example.com/mypackage-1.0.0-py3-none-any.whl
+
 # Git repo
 uvx uv-metadata git+https://github.com/psf/requests@main
 
@@ -85,7 +88,8 @@ uvx uv-metadata numpy -p3.9 -kversion
 | &emsp;`*.dist-info` or `*.egg-info` directory | Read directly |
 | &emsp;`*.whl` or `*.zip` file | Extract from zip archive |
 | &emsp;`*.tar.gz` file | Extract from tarball |
-| `git+https://...`, `git@...`, or `pkg @ url` | Install to temp dir, read dist-info |
+| `https://.../*.whl`, or `pkg @ https://.../*.whl` | Stream dist-info from the remote wheel |
+| `git+https://...`, `git@...`, or other `pkg @ url` | Install to temp dir, read dist-info |
 | plain name or version constraint (`name`, `name>=x`, etc.) | Resolve via uv, stream dist-info from remote wheel; fall back to downloading sdist |
 
 
@@ -155,6 +159,7 @@ options:
 
 1. `uv pip compile --format pylock.toml` resolves to a concrete wheel URL without downloading
 2. `SeekableHttpFile` + `ZipFile` streams only the dist-info files via HTTP range requests
+   (also available as `get_metadata_from_wheel_url(url)`)
 3. Falls back to downloading the sdist when no wheel is available
 
 ### Unified metadata reading

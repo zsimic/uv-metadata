@@ -2,7 +2,7 @@ import json
 
 import runez
 
-from uv_metadata import canonical_git_url
+from uv_metadata import canonical_git_url, wheel_url
 
 
 def test_bogus(cli):
@@ -150,3 +150,23 @@ def test_single_key(cli):
     cli.run(cli.project_folder, "-kname2")
     assert cli.failed
     assert "no key 'name2' in metadata" in cli.logged
+
+
+def test_wheel_url(cli):
+    assert wheel_url("colorama") is None
+    assert wheel_url("git+https://github.com/zsimic/uv-metadata@main") is None
+    assert wheel_url("https://example.com/simple/colorama/") is None
+    url = (
+        "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/"
+        "colorama-0.4.6-py2.py3-none-any.whl"
+    )
+    assert wheel_url(url) == url
+    assert wheel_url(f"{url}#sha256=abc") == f"{url}#sha256=abc"
+    assert wheel_url(f"colorama @ {url}") == url
+
+    cli.run([f"colorama @ {url}"])
+    assert cli.succeeded
+    payload = json.loads(cli.logged.stdout.contents())
+    assert payload["name"] == "colorama"
+    assert payload["version"] == "0.4.6"
+    assert payload["requires_python"].endswith(">=2.7")
