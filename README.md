@@ -150,6 +150,7 @@ options:
   -p, --python PYTHON  Python version to target (e.g. 3.11)
   -k, --key KEY        Show only this key from the metadata
   --full               Include full description in output
+  -v, --verbose        Show build backend output on failure
 ```
 
 

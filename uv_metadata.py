@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 from zipfile import ZipFile
 
 import pyproject_hooks
-from build import ProjectBuilder
+from build import BuildBackendException, ProjectBuilder
 from build.env import IsolatedEnv
 from seekablehttpfile import SeekableHttpFile
 
@@ -24,6 +24,8 @@ METADATA_FILES = ("METADATA", "PKG-INFO", "entry_points.txt", "top_level.txt")
 INFO_DIR_RX = re.compile(r"^(.+\.(dist|egg)-info)/(" + "|".join(re.escape(f) for f in METADATA_FILES) + r")$")
 ROOT_PKG_INFO_RX = re.compile(r"^([^/]+)/PKG-INFO$")
 UV_PATH = os.environ.get("UV") or shutil.which("uv")  # `uv run` / `uvx` set $UV to the uv running them
+BACKEND_ERROR_RX = re.compile(r"^(error|(?:[A-Z][a-z]*)+): (.+)$")
+LOG = logging.getLogger(__name__)
 
 # Silence `build` module logging, too chatty
 logging.getLogger("build").setLevel(logging.WARNING)
@@ -191,11 +193,24 @@ def extract_metadata_from_project_folder(project_folder: Path, python: str | Non
 
         run_uv(*venv_args, str(venv_folder), env=env)
         isolated_env = _UvIsolatedEnv(venv_folder)
-        builder = ProjectBuilder.from_isolated_env(isolated_env, project_folder, runner=pyproject_hooks.quiet_subprocess_runner)
-        isolated_env.install(builder.build_system_requires)
-        isolated_env.install(builder.get_requires_for_build("wheel"))
-        meta_path = builder.metadata_path(tmpdir_path)
-        return extract_metadata_from_dist_info(Path(meta_path))
+        try:
+            builder = ProjectBuilder.from_isolated_env(isolated_env, project_folder, runner=pyproject_hooks.quiet_subprocess_runner)
+            isolated_env.install(builder.build_system_requires)
+            isolated_env.install(builder.get_requires_for_build("wheel"))
+            meta_path = builder.metadata_path(tmpdir_path)
+            return extract_metadata_from_dist_info(Path(meta_path))
+
+        except BuildBackendException as e:
+            output = getattr(e.exception, "output", None)
+            if isinstance(output, bytes):
+                output = output.decode("utf-8", errors="ignore")
+
+            LOG.debug("%s, build backend output:\n%s", e, output or "-no output-")
+            problem = _build_backend_problem(output) or str(e)
+            if not LOG.isEnabledFor(logging.DEBUG):
+                problem += " (use -v to see build backend output)"
+
+            abort(problem)
 
 
 def extract_metadata_from_file(path: Path) -> dict:
@@ -268,6 +283,17 @@ def extract_metadata_from_uv_resolve(pip_spec: str, python: str | None = None) -
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _build_backend_problem(output: str | None) -> str | None:
+    """Most relevant error line from build backend `output`, if any"""
+    for line in reversed((output or "").splitlines()):
+        m = BACKEND_ERROR_RX.match(line)
+        if m:
+            # Exceptions are shown as-is ("ValueError: ..."), plain "error: ..." lines (setuptools) without the prefix
+            return m.group(2) if m.group(1) == "error" else line
+
+    return None
 
 
 def _download_and_extract(url: str) -> dict:
@@ -422,9 +448,13 @@ def main(args=None):
     parser.add_argument("-p", "--python", help="Python version to target (e.g. 3.11)")
     parser.add_argument("-k", "--key", help="Show only this key from the metadata")
     parser.add_argument("--full", action="store_true", help="Include full description in output")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Show build backend output on failure")
     parser.add_argument("package", default=None, nargs="?", help="Package to inspect (default: current folder)")
     args = parser.parse_args(args=args)
+    if args.verbose:
+        logging.basicConfig(format="%(message)s")  # No-op if logging is already configured
 
+    LOG.setLevel(logging.DEBUG if args.verbose else logging.INFO)
     meta_dict = get_metadata_from_pip_spec(args.package, args.python)
     if not args.full:
         meta_dict.pop("description", None)

@@ -170,3 +170,21 @@ def test_wheel_url(cli):
     assert payload["name"] == "colorama"
     assert payload["version"] == "0.4.6"
     assert payload["requires_python"].endswith(">=2.7")
+
+
+def test_build_backend_failure(cli):
+    # setuptools refuses to build a flat-layout with multiple top-level packages
+    runez.write("sample/pyproject.toml", '[project]\nname = "sample"\nversion = "1.0"\n', logger=None)
+    runez.touch("sample/pkg1/__init__.py", logger=None)
+    runez.touch("sample/pkg2/__init__.py", logger=None)
+    cli.run(f"-p{runez.SYS_INFO.invoker_python}", "sample")
+    assert cli.failed
+    assert "Multiple top-level packages discovered in a flat-layout" in cli.logged.stderr
+    assert "(use -v to see build backend output)" in cli.logged.stderr
+    assert "setuptools will not proceed" not in cli.logged
+
+    cli.run(f"-p{runez.SYS_INFO.invoker_python}", "-v", "sample")
+    assert cli.failed
+    assert "Multiple top-level packages discovered in a flat-layout" in cli.logged.stderr
+    assert "use -v" not in cli.logged
+    assert "setuptools will not proceed" in cli.logged
