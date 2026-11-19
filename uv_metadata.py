@@ -143,7 +143,11 @@ def get_metadata_from_wheel_url(url: str) -> dict:
 def extract_metadata_from_dist_info(folder: Path) -> dict:
     """Convert a .(egg|dist)-info directory to a clean metadata dict via importlib.metadata"""
     dist = PathDistribution(folder)
-    metadata = dist.metadata
+    try:
+        metadata = dist.metadata
+    except FileNotFoundError:  # Python 3.15+ raises MetadataNotFound for missing metadata
+        metadata = None
+
     if not metadata:
         abort(f"No metadata files in {folder.name}")
 

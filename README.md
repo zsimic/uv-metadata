@@ -1,197 +1,100 @@
 # uv-metadata
 
-Inspect any Python package metadata from any source without installing.
+Inspect Python package metadata as JSON from published packages, local wheels and sdists,
+project folders, and Git repositories.
 
 ```shell
-$ uvx uv-metadata requests -kversion
-2.32.4
+# Inspect a published package
+uvx uv-metadata requests
 
-$ uvx uv-metadata requests -krequires_python
->=3.10
+# Print a single value, suitable for scripts
+uvx uv-metadata requests -kversion
 
-$ uvx uv-metadata 'pip<23' -kversion
-22.3.1
+# Combine a version constraint with a target Python version
+uvx uv-metadata 'setuptools<70' -p3.7 -kversion
 ```
 
-Works with published packages, local wheels/sdists, project folders, and git repos.
-For published packages, metadata is streamed directly from the remote wheel via HTTP range
-requests — typically a few KB, no full download needed.
+Published wheel metadata is streamed via HTTP range requests, usually fetching only a few KB.
+Local archives and metadata directories are read directly. Project folders run their build
+backend in a temporary environment; Git and other non-wheel URL references use a temporary
+package install without runtime dependencies. Your environment is not the install target.
 
-
-## Why this is useful
-
-Getting package metadata as JSON from a simple CLI opens up a lot of possibilities:
-
-- **Scripting**: what's the latest version of a package? What about the last 2.x release?
-  What's the latest version that still supports Python 3.7?
-  (`uvx uv-metadata -p3.7 setuptools -kversion`)
-- **Validation**: CI checks that verify your package metadata is complete before publishing —
-  are author, URL, license, classifiers all present?
-- **Verifying your own project**: after setting up dynamic versioning (e.g. `setuptools-scm`),
-  just run `uvx uv-metadata .` to confirm your metadata looks right — no need to build or install
-- **Dependency auditing**: quickly check what a package requires, what Python versions it supports,
-  or what entry points it exposes — all without installing anything
-
-This project also serves as a reference implementation for a proposed native
-[`uv metadata`](https://github.com/zsimic/uv-metadata/blob/main/uv-metadata-spec.md) subcommand
-(see [astral-sh/uv#6037](https://github.com/astral-sh/uv/issues/6037) and the [spec](https://github.com/zsimic/uv-metadata/blob/main/uv-metadata-spec.md)).
-
-Requires `uv`: the one running it (`uvx` / `uv run` set `$UV`), or else `uv` on `PATH`.
-
+Requires Python 3.10 or newer and `uv`. When launched with `uvx` or `uv run`, the tool uses
+the executable identified by `$UV`; otherwise it looks for `uv` on `PATH`.
 
 ## Installation
 
-```shell
-# Run directly (no install needed)
-uvx uv-metadata requests
+Run directly with `uvx`, as above, or install a persistent command:
 
-# Or install permanently
+```shell
 uv tool install uv-metadata
+uv-metadata requests
 ```
 
+## Inputs
 
-## Quick examples
+Omitting the package inspects the current project folder.
 
 ```shell
-# Full metadata as JSON
-uvx uv-metadata flask
-
-# Single key
-uvx uv-metadata flask -kversion
-
-# Version constraint
-uvx uv-metadata 'flask<3' -kversion
-
-# Local project
+# Local project: prepare metadata through its PEP 517 build backend
 uvx uv-metadata .
 
-# Local wheel or sdist
+# Local wheel, sdist (.tar.gz or .zip), or extracted metadata directory
 uvx uv-metadata ./dist/mypackage-1.0.0-py3-none-any.whl
+uvx uv-metadata ./dist/mypackage-1.0.0.tar.gz
+uvx uv-metadata ./mypackage-1.0.0.dist-info
 
-# Remote wheel (only its dist-info gets downloaded)
+# Remote wheel: stream its metadata
 uvx uv-metadata https://example.com/mypackage-1.0.0-py3-none-any.whl
+uvx uv-metadata 'mypackage @ https://example.com/mypackage-1.0.0-py3-none-any.whl'
 
-# Git repo
+# Git repository, optionally at a revision
 uvx uv-metadata git+https://github.com/psf/requests@main
-
-# Target a specific Python version
-uvx uv-metadata numpy -p3.9 -kversion
 ```
 
+Existing filesystem paths take precedence over package names. Use a path prefix such as `./`
+when referring to a local file that may be missing, so it is treated as a path.
+Both `.dist-info` and `.egg-info` directories are accepted. Published packages without a
+wheel fall back to downloading and reading a source archive.
 
-## Input routing
+## Output and options
 
-| Input | Strategy |
-|---|---|
-| `.`, `./path`, `/abs/path`, or any existing filesystem path | |
-| &emsp;directory with `pyproject.toml` or `setup.py` | Build metadata via PEP 517 |
-| &emsp;`*.dist-info` or `*.egg-info` directory | Read directly |
-| &emsp;`*.whl` or `*.zip` file | Extract from zip archive |
-| &emsp;`*.tar.gz` file | Extract from tarball |
-| `https://.../*.whl`, or `pkg @ https://.../*.whl` | Stream dist-info from the remote wheel |
-| `git+https://...`, `git@...`, or other `pkg @ url` | Install to temp dir, read dist-info |
-| plain name or version constraint (`name`, `name>=x`, etc.) | Resolve via uv, stream dist-info from remote wheel; fall back to downloading sdist |
+The default output is an indented JSON object with sorted keys:
 
-
-## Output format
-
-JSON with sorted keys. The `description` (long description) field is omitted by default
-as it is typically very large; use `--full` to include it.
+- Metadata keys use `lower_snake_case`.
+- Single-value fields are strings; repeatable fields such as `requires_dist` are lists.
+- `entry_points` groups entries as `{"group": {"name": "module:attr"}}`.
+- `top_level`, when supplied by the package, lists top-level import names.
+- Empty fields and legacy `UNKNOWN` values are omitted.
+- `description` and `dynamic` are omitted unless `--full` is given.
 
 ```shell
-$ uvx uv-metadata pip
-{
-    "author_email": "The pip developers <distutils-sig@python.org>",
-    "classifiers": [
-        "Development Status :: 5 - Production/Stable",
-        ...
-    ],
-    "description_content_type": "text/x-rst",
-    "entry_points": {
-        "console_scripts": {
-            "pip": "pip._internal.cli.main:main",
-            "pip3": "pip._internal.cli.main:main"
-        }
-    },
-    "license_expression": "MIT",
-    "metadata_version": "2.4",
-    "name": "pip",
-    "project_url": [
-        "Documentation, https://pip.pypa.io",
-        "Source, https://github.com/pypa/pip"
-    ],
-    "requires_python": ">=3.9",
-    "summary": "The PyPA recommended tool for installing Python packages.",
-    "version": "26.0.1"
-}
+# Raw string for a single-value key; JSON for a list or object
+uvx uv-metadata flask -kversion
+uvx uv-metadata flask -krequires_dist
+
+# Include the long description and dynamic metadata declarations
+uvx uv-metadata flask --full
+
+# Print just the long description
+uvx uv-metadata flask --full -kdescription
+
+# Show full build-backend output when inspecting a project fails
+uvx uv-metadata . -v
+
+# Current option reference
+uvx uv-metadata --help
 ```
 
-Structural rules:
-- Keys are `lower_snake_case`
-- Single-occurrence fields: plain string
-- Multi-occurrence fields: list of strings
-- `entry_points`: `{"group": {"name": "module:attr"}}`
-- `top_level`: list of top-level importable names
-- `UNKNOWN` values are omitted
+`-p` / `--python` selects the Python target for package resolution, project metadata builds,
+and temporary installs. Reading an existing archive or metadata directory does not resolve
+it for another Python version. Without `-p`, published-package resolution seeks the latest
+release independently of the Python running this command.
 
+A missing key or extraction failure exits with an error message on stderr and a nonzero status.
+`--full` is needed when selecting an otherwise omitted key, such as `-kdescription`.
 
-## CLI reference
+## Native uv proposal
 
-```
-usage: uv-metadata [-h] [-p PYTHON] [-k KEY] [--full] [package]
-
-Output the metadata of a package, in machine-readable format
-
-positional arguments:
-  package              Package to inspect (default: current folder)
-
-options:
-  -h, --help           show this help message and exit
-  -p, --python PYTHON  Python version to target (e.g. 3.11)
-  -k, --key KEY        Show only this key from the metadata
-  --full               Include full description in output
-  -v, --verbose        Show build backend output on failure
-```
-
-
-## How it works
-
-### Fast path for published packages
-
-1. `uv pip compile --format pylock.toml` resolves to a concrete wheel URL without downloading
-2. `SeekableHttpFile` + `ZipFile` streams only the dist-info files via HTTP range requests
-   (also available as `get_metadata_from_wheel_url(url)`)
-3. Falls back to downloading the sdist when no wheel is available
-
-### Unified metadata reading
-
-All extraction strategies produce a dist-info folder which is read by
-`importlib.metadata.PathDistribution`. Both `METADATA` (wheels) and `PKG-INFO` (sdists)
-are handled transparently.
-
-### Archive extraction
-
-A `MetadataReader` base class with `ZipReader` and `TarReader` implementations provides
-uniform member discovery and extraction across archive formats.
-
-
-## Dependencies
-
-| Package | Purpose |
-|---|---|
-| [`build`](https://pypi.org/project/build/) | PEP 517 metadata building for local project folders |
-| [`pyproject-hooks`](https://pypi.org/project/pyproject-hooks/) | Quiet subprocess runner used by `build` |
-| [`seekablehttpfile`](https://pypi.org/project/seekablehttpfile/) | HTTP range requests for streaming dist-info from remote wheels |
-
-
-## Relevant PEPs
-
-- [PEP 241](https://peps.python.org/pep-0241/) – Metadata for Python Software Packages 1.0
-- [PEP 314](https://peps.python.org/pep-0314/) – Metadata for Python Software Packages 1.1
-- [PEP 345](https://peps.python.org/pep-0345/) – Metadata for Python Software Packages 1.2
-- [PEP 566](https://peps.python.org/pep-0566/) – Metadata for Python Software Packages 2.1
-- [PEP 508](https://peps.python.org/pep-0508/) – Dependency specification for Python Software Packages
-- [PEP 517](https://peps.python.org/pep-0517/) – A build-system independent format for source trees
-- [PEP 643](https://peps.python.org/pep-0643/) – Metadata for Package Source Distributions
-- [PEP 658](https://peps.python.org/pep-0658/) – Serve Distribution Metadata in the Simple Repository API
-- [PEP 639](https://peps.python.org/pep-0639/) – Improving License Clarity with Better Package Metadata
+This project is a Python reference implementation for the proposed native `uv metadata`
+subcommand discussed in [astral-sh/uv#6037](https://github.com/astral-sh/uv/issues/6037).

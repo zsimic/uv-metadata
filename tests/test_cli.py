@@ -20,7 +20,13 @@ def test_dist_info(cli):
     runez.ensure_folder("sample/sample-1.0.dist-info", logger=None)
     cli.run("sample/sample-1.0.dist-info")
     assert cli.failed
-    assert "No metadata files in sample-1.0.dist-info" in cli.logged
+    assert cli.logged.stderr.contents().strip() == "No metadata files in sample-1.0.dist-info"
+
+    # An empty metadata file should produce the same concise error
+    runez.touch("sample/sample-1.0.dist-info/METADATA", logger=None)
+    cli.run("sample/sample-1.0.dist-info")
+    assert cli.failed
+    assert cli.logged.stderr.contents().strip() == "No metadata files in sample-1.0.dist-info"
 
     # Build a minimal .whl and then run against the extracted dist-info
     meta = "Metadata-Version: 2.1\nName: sample\nVersion: 1.0\nSummary: A test package\n"
