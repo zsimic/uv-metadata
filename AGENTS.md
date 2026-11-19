@@ -5,7 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 Single-file CLI tool (`uv_metadata.py`) that inspects Python package metadata without installing.
-Published on PyPI as `uv-metadata`, runnable via `uvx uv-metadata`. Requires `uv` on PATH.
+Published on PyPI as `uv-metadata`, runnable via `uvx uv-metadata`. Requires `uv`: the one running it
+(`uvx` / `uv run` set `$UV`), or else `uv` on PATH.
 
 ## Commands
 
@@ -42,7 +43,8 @@ All logic lives in `uv_metadata.py`. The flow is:
    - Local files (.whl/.zip/.tar.gz) → `extract_metadata_from_file()` → `ZipReader`/`TarReader`
    - Local dist-info/egg-info dir → `extract_metadata_from_dist_info()`
    - Local project folder → `extract_metadata_from_project_folder()` (PEP 517 build)
-   - Git/URL refs → `extract_metadata_from_uv_install()` (temp install via uv)
+   - Remote `.whl` URL (bare or `name @ url`) → `get_metadata_from_wheel_url()` (streams dist-info via HTTP range requests)
+   - Git/other URL refs → `extract_metadata_from_uv_install()` (temp install via uv)
    - Plain package names → `extract_metadata_from_uv_resolve()` (fast: resolve + stream wheel metadata via HTTP range requests, fallback: download sdist)
 3. **All paths converge** on `extract_metadata_from_dist_info()` which uses `importlib.metadata.PathDistribution`
 
@@ -54,6 +56,8 @@ Key design details:
 - `description` (long description) is stripped by default; `--full` flag preserves it
 - `dynamic` is stripped by default; `--full` flag preserves it
 - `canonical_git_url()` accepts plain GitHub HTTPS URLs and `git@` SSH shorthand
+- Build backend failures (project folder path) abort with the most relevant error line of the backend's output;
+  `-v` shows the full output (via `LOG.debug`)
 
 ## Testing
 
